@@ -762,12 +762,14 @@ export function EveConsole() {
         });
       }
       if (action.type === "open_url" && action.url) {
-        // Try window.open: Chrome may open it in a background tab without switching focus,
-        // OR block it entirely from async context. Either way, ALWAYS surface the tap card
-        // so the user has a clear visual confirmation and can bring the tab forward.
-        // Never use window.location.assign — that navigates Rovik away.
-        window.open(action.url, "_blank", "noopener,noreferrer");
-        setPendingUrl({ url: action.url, label: action.description ?? action.url });
+        // window.open returns a window object when it succeeds, or null when Chrome
+        // blocks it (no user-gesture token in async context).
+        // Only show the tap card when it's blocked — otherwise the tab is already open
+        // and showing the card would cause the user to open a second duplicate tab.
+        const popup = window.open(action.url, "_blank", "noopener,noreferrer");
+        if (!popup) {
+          setPendingUrl({ url: action.url, label: action.description ?? action.url });
+        }
       }
       if (action.type === "set_reminder") {
         const delayMs = action.delay_minutes * 60_000;

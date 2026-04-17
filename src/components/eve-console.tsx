@@ -496,7 +496,7 @@ export function EveConsole() {
 
   function startSilenceDetection() {
     stopSilenceRaf();
-    const SILENCE_MS = 2000;
+    const SILENCE_MS = 3500;
 
     const tick = () => {
       if (voiceStateRef.current !== "listening") return;
@@ -535,13 +535,20 @@ export function EveConsole() {
     lastSpeechRef.current = Date.now();
     setInterimTranscript(seedText);
     interimTranscriptRef.current = seedText;
-    startSilenceDetection();
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rec = new SR() as any;
     rec.lang = "en-US";
     rec.continuous = true;
     rec.interimResults = true;
+
+    // Reset the silence clock the moment the mic is actually live so the
+    // user gets the full silence window — not a shortened one due to Chrome
+    // taking time to initialise the new recognition instance.
+    rec.onstart = () => {
+      lastSpeechRef.current = Date.now();
+      startSilenceDetection();
+    };
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rec.onresult = (e: any) => {

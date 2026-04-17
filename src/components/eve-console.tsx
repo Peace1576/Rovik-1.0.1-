@@ -242,25 +242,21 @@ export function EveConsole() {
       if (voiceStateRef.current !== "standby") return;
 
       const now = Date.now();
+      // A ref that's missing entirely or never reached onstart
       const missingListener = !wakeRecogRef.current || !wakeRecogActiveRef.current;
+      // A listener that's been silent for >20s — Chrome killed it without firing onend
       const staleListener =
         wakeLastEventRef.current > 0 &&
-        now - wakeLastEventRef.current > 55_000;
+        now - wakeLastEventRef.current > 20_000;
 
-      if (missingListener) {
-        startWakeWordListener();
-        return;
+      if (missingListener || staleListener) {
+        // Force-restart directly — don't rely on onend firing (it sometimes doesn't)
+        try { wakeRecogRef.current?.stop(); } catch { /* ignore */ }
+        wakeRecogRef.current = null;
+        wakeRecogActiveRef.current = false;
+        window.setTimeout(startWakeWordListener, 350);
       }
-
-      if (staleListener) {
-        try {
-          wakeRecogRef.current?.stop();
-        } catch {
-          wakeRecogRef.current = null;
-          wakeRecogActiveRef.current = false;
-        }
-      }
-    }, 5000);
+    }, 4000);
 
     return () => {
       window.removeEventListener("focus", reviveWakeWord);
@@ -648,6 +644,11 @@ export function EveConsole() {
       }
     };
 
+    // Track whether onerror already scheduled a restart so onend doesn't
+    // also schedule one — the double-restart storm is what kills the listener
+    // after repeated 60s Chrome cycles.
+    let restartScheduled = false;
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rec.onerror = (e: any) => {
       wakeRecogActiveRef.current = false;
@@ -658,16 +659,18 @@ export function EveConsole() {
         wakeRecogRef.current = null;
         return;
       }
-      // "no-speech", "aborted", and temporary browser/service glitches should recover automatically
+      // Schedule restart from onerror — onend will see restartScheduled and skip
       wakeRecogRef.current = null;
-      window.setTimeout(startWakeWordListener, e.error === "service-unavailable" ? 1500 : 150);
+      restartScheduled = true;
+      window.setTimeout(startWakeWordListener, e.error === "service-unavailable" ? 1500 : 200);
     };
 
     rec.onend = () => {
       wakeRecogActiveRef.current = false;
       wakeLastEventRef.current = Date.now();
-      // Chrome stops continuous recognition after ~60s; restart transparently
-      if (voiceStateRef.current === "standby" && !triggered) {
+      // Only restart from onend if onerror didn't already queue one
+      if (voiceStateRef.current === "standby" && !triggered && !restartScheduled) {
+        restartScheduled = true;
         window.setTimeout(startWakeWordListener, 80);
       }
     };

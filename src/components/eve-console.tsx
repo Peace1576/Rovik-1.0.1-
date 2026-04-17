@@ -762,8 +762,14 @@ export function EveConsole() {
         });
       }
       if (action.type === "open_url" && action.url) {
-        window.location.assign(action.url);
-        return;
+        // window.open from an async callback has no user-gesture token — Chrome
+        // will block it as a popup. NEVER fall back to window.location.assign;
+        // that navigates the Rovik page away and destroys the entire voice machine.
+        // Instead, surface a tappable "Open" button the user clicks (user gesture → allowed).
+        const popup = window.open(action.url, "_blank", "noopener,noreferrer");
+        if (!popup) {
+          setPendingUrl({ url: action.url, label: action.description ?? action.url });
+        }
       }
       if (action.type === "set_reminder") {
         const delayMs = action.delay_minutes * 60_000;

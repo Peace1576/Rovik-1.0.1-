@@ -1,0 +1,192 @@
+@import "tailwindcss";
+
+:root {
+  --background: #edf2fb;
+  --foreground: #0b1321;
+  --muted: #516177;
+  --surface: rgba(255, 255, 255, 0.68);
+  --surface-strong: rgba(255, 255, 255, 0.9);
+  --stroke: rgba(56, 86, 125, 0.14);
+  --accent: #2bb6ff;
+  --accent-strong: #0076ff;
+  --accent-soft: rgba(43, 182, 255, 0.18);
+  --warm: #ffaf5a;
+  --screen: #04070d;
+  --screen-glow: rgba(33, 153, 255, 0.34);
+  --success: #1fcf97;
+  --danger: #ef5d6f;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 18% 16%, rgba(43, 182, 255, 0.26), transparent 28%),
+    radial-gradient(circle at 82% 18%, rgba(255, 175, 90, 0.16), transparent 24%),
+    radial-gradient(circle at 50% 100%, rgba(0, 118, 255, 0.12), transparent 32%),
+    linear-gradient(180deg, #f5f8ff 0%, #e9f0fb 48%, #dce6f3 100%);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+body::before {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    linear-gradient(
+      120deg,
+      rgba(255, 255, 255, 0.52) 0%,
+      rgba(255, 255, 255, 0.06) 42%,
+      rgba(255, 255, 255, 0.2) 100%
+    );
+  content: "";
+  pointer-events: none;
+}
+
+a {
+  color: inherit;
+}
+
+::selection {
+  background: rgba(0, 118, 255, 0.2);
+}
+
+.glass-panel {
+  background: var(--surface);
+  border: 1px solid var(--stroke);
+  box-shadow:
+    0 28px 60px rgba(8, 22, 44, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.56);
+  backdrop-filter: blur(28px);
+}
+
+.glass-panel-strong {
+  background: var(--surface-strong);
+  border: 1px solid rgba(56, 86, 125, 0.18);
+  box-shadow:
+    0 30px 80px rgba(11, 27, 51, 0.15),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(28px);
+}
+
+.eve-float {
+  animation: eve-float 6.2s ease-in-out infinite;
+}
+
+.eve-ring {
+  animation: eve-ring 7.5s ease-in-out infinite;
+}
+
+.eve-scan {
+  animation: eve-scan 6s linear infinite;
+}
+
+.eve-blink {
+  animation: eve-blink 5.4s ease-in-out infinite;
+}
+
+.eve-orbit {
+  animation: eve-orbit 11s linear infinite;
+}
+
+.aurora-shift {
+  animation: aurora-shift 10s ease-in-out infinite alternate;
+}
+
+.transcript-fade {
+  overscroll-behavior: contain;
+  scroll-padding-block: 1rem;
+}
+
+@keyframes eve-float {
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-12px);
+  }
+}
+
+@keyframes eve-ring {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.74;
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 1;
+  }
+}
+
+@keyframes eve-scan {
+  0% {
+    transform: translateY(-110%);
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 0.8;
+  }
+  100% {
+    transform: translateY(160%);
+    opacity: 0;
+  }
+}
+
+@keyframes eve-blink {
+  0%,
+  45%,
+  47%,
+  100% {
+    transform: scaleY(1);
+  }
+  46% {
+    transform: scaleY(0.15);
+  }
+}
+
+@keyframes eve-orbit {
+  from {
+    transform: rotate(0deg) translateX(12px) rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg) translateX(12px) rotate(-360deg);
+  }
+}
+
+@keyframes aurora-shift {
+  0% {
+    transform: rotate(-4deg) scale(1);
+  }
+  100% {
+    transform: rotate(4deg) scale(1.08);
+  }
+}
+
+@media (max-width: 768px) {
+  body {
+    background:
+      radial-gradient(circle at 30% 12%, rgba(43, 182, 255, 0.24), transparent 30%),
+      radial-gradient(circle at 82% 18%, rgba(255, 175, 90, 0.18), transparent 28%),
+      linear-gradient(180deg, #f5f8ff 0%, #e6eefb 52%, #d8e2f1 100%);
+  }
+}

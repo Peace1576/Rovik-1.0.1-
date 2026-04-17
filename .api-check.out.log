@@ -1,0 +1,8 @@
+
+> rovik-eve@0.1.0 start
+> next start --hostname localhost --port 3124
+
+▲ Next.js 16.2.3
+- Local:         http://localhost:3124
+- Network:       http://localhost:3124
+✓ Ready in 236ms

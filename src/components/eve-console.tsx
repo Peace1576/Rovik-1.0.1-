@@ -208,6 +208,7 @@ export function EveConsole() {
   const silenceTimerRef = useRef<number | null>(null);  // setInterval silence check
   const wakeWatchdogRef = useRef<number | null>(null);  // setInterval health check
   const postReplyTimerRef = useRef<number | null>(null);
+  const externalWindowRef = useRef<Window | null>(null);
 
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
   const transcriptBoxRef = useRef<HTMLDivElement | null>(null);
@@ -749,6 +750,43 @@ export function EveConsole() {
     }
   }
 
+  function openExternalTarget(url: string, label: string) {
+    setPendingUrl(null);
+
+    const existing = externalWindowRef.current;
+    if (existing && !existing.closed) {
+      try {
+        existing.location.replace(url);
+        existing.focus();
+        window.setTimeout(() => window.focus(), 40);
+        return true;
+      } catch {
+        externalWindowRef.current = null;
+      }
+    }
+
+    const popup = window.open(
+      url,
+      "rovik-external",
+      "popup=yes,width=1320,height=900,left=80,top=60,resizable=yes,scrollbars=yes",
+    );
+
+    if (!popup) {
+      setPendingUrl({ url, label });
+      return false;
+    }
+
+    externalWindowRef.current = popup;
+    try {
+      popup.opener = null;
+      popup.blur();
+    } catch {
+      /* ignore browser restrictions */
+    }
+    window.setTimeout(() => window.focus(), 40);
+    return true;
+  }
+
   async function executeActions(actions: ClientAction[]) {
     if (!actions.length) return;
     setRecentActions(actions);
@@ -762,14 +800,7 @@ export function EveConsole() {
         });
       }
       if (action.type === "open_url" && action.url) {
-        // window.open returns a window object when it succeeds, or null when Chrome
-        // blocks it (no user-gesture token in async context).
-        // Only show the tap card when it's blocked — otherwise the tab is already open
-        // and showing the card would cause the user to open a second duplicate tab.
-        const popup = window.open(action.url, "_blank", "noopener,noreferrer");
-        if (!popup) {
-          setPendingUrl({ url: action.url, label: action.description ?? action.url });
-        }
+        openExternalTarget(action.url, action.description ?? action.url);
       }
       if (action.type === "set_reminder") {
         const delayMs = action.delay_minutes * 60_000;

@@ -5,6 +5,7 @@ import { jsonNoStore, rejectCrossSiteRequest } from "@/lib/api-security";
 import {
   buildConversationContextInstruction,
   deriveConversationState,
+  getResolvedPendingMedia,
   normalizeConversationState,
   type ToolExecutionEvent,
 } from "@/lib/conversation-state";
@@ -91,6 +92,65 @@ export async function POST(request: NextRequest) {
         { error: "Send a prompt for Eve to respond to." },
         400,
       );
+    }
+
+    const resolvedPendingMedia = getResolvedPendingMedia(
+      conversationState,
+      latestUserMessage,
+    );
+
+    if (resolvedPendingMedia && conversationState.pendingMediaSelection) {
+      const pending = conversationState.pendingMediaSelection;
+      const item = resolvedPendingMedia.item;
+      const toolName = pending.source === "youtube" ? "play_youtube" : "spotify_play";
+      const toolArgs =
+        pending.source === "youtube"
+          ? {
+              video_id: item.videoId ?? "",
+              url: item.url ?? "",
+              title: item.title,
+              channel: item.channel ?? "",
+            }
+          : {
+              query: [item.title, item.artists].filter(Boolean).join(" "),
+              type: "track",
+            };
+
+      const { toolOutput, clientAction } = await executeTool(
+        toolName,
+        toolArgs,
+        userId,
+        supabase,
+      );
+
+      const actions = clientAction ? [clientAction] : [];
+      const toolEvents: ToolExecutionEvent[] = [
+        {
+          name: toolName,
+          args: toolArgs,
+          toolOutput,
+          clientAction,
+        },
+      ];
+      const nextConversationState = deriveConversationState(
+        conversationState,
+        toolEvents,
+      );
+
+      const title = item.title;
+      const byline = item.channel || item.artists ? ` by ${item.channel ?? item.artists}` : "";
+      const reply = toolOutput.error
+        ? String(toolOutput.error)
+        : pending.source === "youtube"
+          ? `Now playing "${title}"${byline}.`
+          : `Playing "${title}"${byline} on Spotify.`;
+
+      return jsonNoStore({
+        mode: "live",
+        reply,
+        actions,
+        state: nextConversationState,
+      });
     }
 
     const totalChars = messages.reduce((sum, message) => sum + message.content.length, 0);

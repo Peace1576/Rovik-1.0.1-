@@ -175,6 +175,20 @@ function resolvePendingMediaReply(
   return null;
 }
 
+function looksLikeStandaloneRequest(text: string) {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) return false;
+
+  const tokenCount = normalized.split(/\s+/).filter(Boolean).length;
+  if (tokenCount <= 4) return false;
+
+  return (
+    /\b(can you|could you|please|search|find|look up|show me|play|watch|open)\b/.test(normalized) &&
+    !isAffirmativeReply(normalized) &&
+    !/\b(first|second|third|last|that one|the one)\b/.test(normalized)
+  );
+}
+
 function formatPendingItem(item: PendingMediaItem, index: number) {
   const byline = item.channel || item.artists ? ` by ${item.channel ?? item.artists}` : "";
   const locator = item.videoId
@@ -195,6 +209,9 @@ export function buildConversationContextInstruction(
   if (!pending) return null;
 
   const resolved = resolvePendingMediaReply(pending, latestUserMessage);
+  if (!resolved && looksLikeStandaloneRequest(latestUserMessage)) {
+    return null;
+  }
   const options = pending.items.map(formatPendingItem).join("\n");
 
   if (resolved) {
@@ -221,6 +238,15 @@ export function buildConversationContextInstruction(
     `Available options:\n${options}`,
     "Interpret short replies like 'yes', 'play it', 'that one', or ordinal references against these options before asking the user to restate them.",
   ].join("\n");
+}
+
+export function getResolvedPendingMedia(
+  state: ConversationState,
+  latestUserMessage: string,
+) {
+  const pending = state.pendingMediaSelection;
+  if (!pending) return null;
+  return resolvePendingMediaReply(pending, latestUserMessage);
 }
 
 export function deriveConversationState(

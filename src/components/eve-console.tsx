@@ -677,6 +677,9 @@ export function EveConsole() {
 
     cancelPlayback();
     userScrolledRef.current = false;
+    if (/\b(play|watch|youtube|spotify|video|song|music)\b/i.test(submittedPrompt)) {
+      setActiveVideo(null);
+    }
 
     const userMessage: Message = {
       id: makeId(),

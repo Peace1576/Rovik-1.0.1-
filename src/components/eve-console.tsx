@@ -165,6 +165,10 @@ export function EveConsole() {
   const wakeRecogRef = useRef<any>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const activeRecogRef = useRef<any>(null);
+  const wakeRecogActiveRef = useRef(false);
+  const wakeLastEventRef = useRef(0);
+  const interimTranscriptRef = useRef("");
+  const wakeWatchdogRef = useRef<number | null>(null);
   const lastSpeechRef = useRef(0);
   const finalTranscriptRef = useRef("");
   const silenceRafRef = useRef<number | null>(null);
@@ -206,11 +210,65 @@ export function EveConsole() {
         window.speechSynthesis.cancel();
       }
       if (fallbackTimerRef.current) window.clearInterval(fallbackTimerRef.current);
+      if (wakeWatchdogRef.current) window.clearInterval(wakeWatchdogRef.current);
       if (mouthRafRef.current) cancelAnimationFrame(mouthRafRef.current);
       if (silenceRafRef.current) cancelAnimationFrame(silenceRafRef.current);
       if (postReplyTimerRef.current) window.clearTimeout(postReplyTimerRef.current);
       wakeRecogRef.current?.stop();
       activeRecogRef.current?.stop();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    function reviveWakeWord() {
+      if (voiceStateRef.current === "standby") {
+        startWakeWordListener();
+      }
+    }
+
+    function onVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        reviveWakeWord();
+      }
+    }
+
+    window.addEventListener("focus", reviveWakeWord);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    wakeWatchdogRef.current = window.setInterval(() => {
+      if (voiceStateRef.current !== "standby") return;
+
+      const now = Date.now();
+      const missingListener = !wakeRecogRef.current || !wakeRecogActiveRef.current;
+      const staleListener =
+        wakeLastEventRef.current > 0 &&
+        now - wakeLastEventRef.current > 55_000;
+
+      if (missingListener) {
+        startWakeWordListener();
+        return;
+      }
+
+      if (staleListener) {
+        try {
+          wakeRecogRef.current?.stop();
+        } catch {
+          wakeRecogRef.current = null;
+          wakeRecogActiveRef.current = false;
+        }
+      }
+    }, 5000);
+
+    return () => {
+      window.removeEventListener("focus", reviveWakeWord);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      if (wakeWatchdogRef.current) {
+        window.clearInterval(wakeWatchdogRef.current);
+        wakeWatchdogRef.current = null;
+      }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -415,6 +473,7 @@ export function EveConsole() {
     activeRecogRef.current = null;
     stopSilenceRaf();
     setInterimTranscript("");
+    interimTranscriptRef.current = "";
     finalTranscriptRef.current = "";
     if (postReplyTimerRef.current) {
       window.clearTimeout(postReplyTimerRef.current);
@@ -423,7 +482,9 @@ export function EveConsole() {
   }
 
   function autoSubmit() {
-    const text = finalTranscriptRef.current.trim();
+    const finalText = finalTranscriptRef.current.trim();
+    const interimText = interimTranscriptRef.current.trim();
+    const text = finalText || (interimText.length >= 4 ? interimText : "");
     stopActiveListening();
     setVoiceSynced("standby");
     window.setTimeout(startWakeWordListener, 350); // delay so Chrome releases mic first
@@ -442,8 +503,16 @@ export function EveConsole() {
       const elapsed = Date.now() - lastSpeechRef.current;
       const progress = Math.min(1, elapsed / SILENCE_MS);
       setSilenceProgress(progress);
-      if (progress >= 1 && finalTranscriptRef.current.trim()) {
-        autoSubmit();
+      if (progress >= 1) {
+        const hasFinalText = Boolean(finalTranscriptRef.current.trim());
+        const hasUsableInterim = interimTranscriptRef.current.trim().length >= 4;
+        if (hasFinalText || hasUsableInterim) {
+          autoSubmit();
+        } else {
+          stopActiveListening();
+          setVoiceSynced("standby");
+          window.setTimeout(startWakeWordListener, 350);
+        }
         return;
       }
       silenceRafRef.current = requestAnimationFrame(tick);
@@ -465,6 +534,7 @@ export function EveConsole() {
     finalTranscriptRef.current = seedText;
     lastSpeechRef.current = Date.now();
     setInterimTranscript(seedText);
+    interimTranscriptRef.current = seedText;
     startSilenceDetection();
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -493,7 +563,9 @@ export function EveConsole() {
         }
       }
       lastSpeechRef.current = Date.now(); // reset silence clock on every word
-      setInterimTranscript(finalTranscriptRef.current + interim);
+      const nextTranscript = finalTranscriptRef.current + interim;
+      interimTranscriptRef.current = nextTranscript;
+      setInterimTranscript(nextTranscript);
     };
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -534,18 +606,26 @@ export function EveConsole() {
 
     wakeRecogRef.current?.stop();
     wakeRecogRef.current = null;
+    wakeRecogActiveRef.current = false;
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rec = new SR() as any;
     rec.lang = "en-US";
     rec.continuous = true;      // keep mic open so Chrome doesn't cut off between phrases
     rec.interimResults = true;  // catch "eve" even before the utterance finalises
+    wakeLastEventRef.current = Date.now();
 
     let triggered = false;
+
+    rec.onstart = () => {
+      wakeRecogActiveRef.current = true;
+      wakeLastEventRef.current = Date.now();
+    };
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rec.onresult = (e: any) => {
       if (triggered || voiceStateRef.current !== "standby") return;
+      wakeLastEventRef.current = Date.now();
 
       // Check each new result individually — don't accumulate old ones
       for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -563,14 +643,22 @@ export function EveConsole() {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rec.onerror = (e: any) => {
+      wakeRecogActiveRef.current = false;
+      wakeLastEventRef.current = Date.now();
       if (triggered || voiceStateRef.current !== "standby") return;
-      // "no-speech" and "aborted" are expected — restart quietly
-      if (e.error !== "not-allowed" && e.error !== "service-unavailable") {
-        window.setTimeout(startWakeWordListener, 150);
+      if (e.error === "not-allowed") {
+        setVoiceSynced("off");
+        wakeRecogRef.current = null;
+        return;
       }
+      // "no-speech", "aborted", and temporary browser/service glitches should recover automatically
+      wakeRecogRef.current = null;
+      window.setTimeout(startWakeWordListener, e.error === "service-unavailable" ? 1500 : 150);
     };
 
     rec.onend = () => {
+      wakeRecogActiveRef.current = false;
+      wakeLastEventRef.current = Date.now();
       // Chrome stops continuous recognition after ~60s; restart transparently
       if (voiceStateRef.current === "standby" && !triggered) {
         window.setTimeout(startWakeWordListener, 80);
@@ -581,6 +669,7 @@ export function EveConsole() {
       rec.start();
       wakeRecogRef.current = rec;
     } catch {
+      wakeRecogActiveRef.current = false;
       // Chrome hasn't released the mic yet — retry after a short delay.
       // This is the most common cause of the wake word listener dying silently.
       if (voiceStateRef.current === "standby") {

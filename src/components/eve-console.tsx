@@ -762,14 +762,12 @@ export function EveConsole() {
         });
       }
       if (action.type === "open_url" && action.url) {
-        // window.open from an async callback has no user-gesture token — Chrome
-        // will block it as a popup. NEVER fall back to window.location.assign;
-        // that navigates the Rovik page away and destroys the entire voice machine.
-        // Instead, surface a tappable "Open" button the user clicks (user gesture → allowed).
-        const popup = window.open(action.url, "_blank", "noopener,noreferrer");
-        if (!popup) {
-          setPendingUrl({ url: action.url, label: action.description ?? action.url });
-        }
+        // Try window.open: Chrome may open it in a background tab without switching focus,
+        // OR block it entirely from async context. Either way, ALWAYS surface the tap card
+        // so the user has a clear visual confirmation and can bring the tab forward.
+        // Never use window.location.assign — that navigates Rovik away.
+        window.open(action.url, "_blank", "noopener,noreferrer");
+        setPendingUrl({ url: action.url, label: action.description ?? action.url });
       }
       if (action.type === "set_reminder") {
         const delayMs = action.delay_minutes * 60_000;
@@ -1201,12 +1199,12 @@ export function EveConsole() {
                 </p>
               </section>
 
-              {/* Popup-blocked link — shown when window.open returns null in async context */}
+              {/* Open-in-new-tab card — always shown so user can bring the tab forward */}
               {pendingUrl && (
-                <div className="glass-panel rounded-[2rem] px-5 py-4 flex items-center justify-between gap-4">
-                  <div>
-                    <p className="font-mono text-[0.65rem] uppercase tracking-[0.2em] text-[#5c718d]">Tap to open (popup was blocked)</p>
-                    <p className="mt-1 text-sm font-semibold text-[#09101d] truncate max-w-[16rem]">{pendingUrl.label}</p>
+                <div className="glass-panel rounded-[2rem] border border-[#2bb6ff]/30 bg-[rgba(43,182,255,0.06)] px-5 py-4 flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="font-mono text-[0.65rem] uppercase tracking-[0.2em] text-[#1a7fc4]">↗ Opens in new tab</p>
+                    <p className="mt-1 text-sm font-semibold text-[#09101d] truncate">{pendingUrl.label}</p>
                   </div>
                   <div className="flex items-center gap-3 text-xs font-medium shrink-0">
                     <a
@@ -1216,7 +1214,7 @@ export function EveConsole() {
                       onClick={() => setPendingUrl(null)}
                       className="rounded-full bg-[linear-gradient(135deg,#0b74ff,#30c2ff)] px-4 py-2 text-white shadow-sm hover:opacity-90"
                     >
-                      Open
+                      Open ↗
                     </a>
                     <button onClick={() => setPendingUrl(null)} className="text-[#5c718d] hover:text-[#09101d]">
                       Dismiss

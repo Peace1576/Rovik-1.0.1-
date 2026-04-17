@@ -242,21 +242,38 @@ export function EveConsole() {
       if (voiceStateRef.current !== "standby") return;
 
       const now = Date.now();
-      // A ref that's missing entirely or never reached onstart
-      const missingListener = !wakeRecogRef.current || !wakeRecogActiveRef.current;
-      // A listener that's been silent for >20s — Chrome killed it without firing onend
-      const staleListener =
-        wakeLastEventRef.current > 0 &&
-        now - wakeLastEventRef.current > 20_000;
+      const timeSinceLast = now - wakeLastEventRef.current;
 
-      if (missingListener || staleListener) {
-        // Force-restart directly — don't rely on onend firing (it sometimes doesn't)
-        try { wakeRecogRef.current?.stop(); } catch { /* ignore */ }
+      // Case 1: no ref at all — listener was never started or got cleared
+      const noRef = !wakeRecogRef.current;
+
+      // Case 2: ref exists but onstart never fired after 8s — stuck before start
+      const stuckBeforeStart =
+        !!wakeRecogRef.current &&
+        !wakeRecogActiveRef.current &&
+        timeSinceLast > 8_000;
+
+      // Case 3: listener was running (onstart fired) but Chrome killed it
+      // without firing onend — no events at all for >50s
+      const silentlyDead =
+        !!wakeRecogRef.current &&
+        wakeRecogActiveRef.current &&
+        timeSinceLast > 50_000;
+
+      if (noRef) {
+        // Nothing running — start fresh
+        startWakeWordListener();
+      } else if (stuckBeforeStart || silentlyDead) {
+        // Listener is stuck or silently dead — force-restart.
+        // Null refs BEFORE stopping so that when onend fires it sees
+        // wakeRecogRef.current === null and skips its own restart.
         wakeRecogRef.current = null;
         wakeRecogActiveRef.current = false;
+        try { wakeRecogRef.current?.stop(); } catch { /* ignore */ }
         window.setTimeout(startWakeWordListener, 350);
       }
-    }, 4000);
+      // Otherwise listener is healthy — leave it alone
+    }, 5000);
 
     return () => {
       window.removeEventListener("focus", reviveWakeWord);
@@ -659,7 +676,8 @@ export function EveConsole() {
         wakeRecogRef.current = null;
         return;
       }
-      // Schedule restart from onerror — onend will see restartScheduled and skip
+      // Only restart from onerror if this is still the official instance
+      if (wakeRecogRef.current !== rec) return;
       wakeRecogRef.current = null;
       restartScheduled = true;
       window.setTimeout(startWakeWordListener, e.error === "service-unavailable" ? 1500 : 200);
@@ -668,9 +686,17 @@ export function EveConsole() {
     rec.onend = () => {
       wakeRecogActiveRef.current = false;
       wakeLastEventRef.current = Date.now();
-      // Only restart from onend if onerror didn't already queue one
-      if (voiceStateRef.current === "standby" && !triggered && !restartScheduled) {
+      // Only restart if: still in standby, wake word not triggered,
+      // onerror didn't already schedule one, AND this instance is still
+      // the official listener (watchdog hasn't replaced it yet).
+      if (
+        voiceStateRef.current === "standby" &&
+        !triggered &&
+        !restartScheduled &&
+        wakeRecogRef.current === rec
+      ) {
         restartScheduled = true;
+        wakeRecogRef.current = null;
         window.setTimeout(startWakeWordListener, 80);
       }
     };

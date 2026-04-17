@@ -15,9 +15,10 @@ const INTEGRATION_FIELD_ALLOWLIST = {
   homeassistant: ["url", "token"],
   google: ["client_id", "client_secret"],
   spotify: ["client_id", "client_secret"],
+  smartthings: ["client_id", "client_secret"],
 } as const;
 
-type OAuthProvider = "google" | "spotify";
+type OAuthProvider = "google" | "spotify" | "smartthings";
 type IntegrationService = keyof typeof INTEGRATION_FIELD_ALLOWLIST;
 
 export function jsonNoStore(

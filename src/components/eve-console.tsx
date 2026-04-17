@@ -4,7 +4,6 @@ import Image from "next/image";
 import {
   FormEvent,
   startTransition,
-  useDeferredValue,
   useEffect,
   useRef,
   useState,
@@ -29,6 +28,13 @@ type Message = {
 type ActiveSpeech = {
   messageId: string;
   text: string;
+};
+
+type ActiveVideo = {
+  videoId: string;
+  url: string;
+  title: string;
+  channel?: string;
 };
 
 const quickPrompts = [
@@ -144,6 +150,7 @@ export function EveConsole() {
   const [recentActions, setRecentActions] = useState<ClientAction[]>([]);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [generatedImage, setGeneratedImage] = useState<{ url: string; prompt: string } | null>(null);
+  const [activeVideo, setActiveVideo] = useState<ActiveVideo | null>(null);
   // Voice mode: off | standby (wake-word listener) | listening (active recording)
   const [voiceState, setVoiceState] = useState<"off" | "standby" | "listening">("standby");
   const [interimTranscript, setInterimTranscript] = useState("");
@@ -167,8 +174,6 @@ export function EveConsole() {
   const mouthRafRef = useRef<number | null>(null);
   const mouthStartRef = useRef(0);
   const activeSpeechRef = useRef<ActiveSpeech | null>(null);
-
-  const deferredPrompt = useDeferredValue(prompt);
 
   const messageCount = messages.length;
   useEffect(() => {
@@ -610,8 +615,19 @@ export function EveConsole() {
     if (!actions.length) return;
     setRecentActions(actions);
     for (const action of actions) {
+      if (action.type === "play_youtube") {
+        setActiveVideo({
+          videoId: action.videoId,
+          url: action.url,
+          title: action.title,
+          channel: action.channel,
+        });
+      }
       if (action.type === "open_url" && action.url) {
-        window.open(action.url, "_blank", "noopener,noreferrer");
+        const popup = window.open(action.url, "_blank", "noopener,noreferrer");
+        if (!popup) {
+          window.location.assign(action.url);
+        }
       }
       if (action.type === "set_reminder") {
         const delayMs = action.delay_minutes * 60_000;
@@ -1055,6 +1071,46 @@ export function EveConsole() {
                 </div>
               )}
 
+              {activeVideo && (
+                <div className="glass-panel overflow-hidden rounded-[2rem]">
+                  <div className="flex flex-wrap items-start justify-between gap-3 px-4 py-3">
+                    <div>
+                      <p className="font-mono text-[0.65rem] uppercase tracking-[0.2em] text-[#5c718d]">Now Playing</p>
+                      <p className="mt-1 text-sm font-semibold text-[#09101d]">{activeVideo.title}</p>
+                      {activeVideo.channel && (
+                        <p className="mt-1 text-xs text-[#5c718d]">{activeVideo.channel}</p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3 text-xs font-medium">
+                      <a
+                        href={activeVideo.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-[#1b4d9b] hover:text-[#09101d]"
+                      >
+                        Open on YouTube
+                      </a>
+                      <button
+                        onClick={() => setActiveVideo(null)}
+                        className="text-[#5c718d] hover:text-[#09101d]"
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </div>
+                  <div className="aspect-video bg-black">
+                    <iframe
+                      key={activeVideo.videoId}
+                      src={`https://www.youtube-nocookie.com/embed/${activeVideo.videoId}?autoplay=1&rel=0&playsinline=1`}
+                      title={activeVideo.title}
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                      allowFullScreen
+                      className="h-full w-full border-0"
+                    />
+                  </div>
+                </div>
+              )}
+
               {recentActions.length > 0 && (
                 <section className="glass-panel rounded-[2rem] px-5 py-5">
                   <p className="font-mono text-[0.68rem] uppercase tracking-[0.3em] text-[#63758e]">
@@ -1070,6 +1126,15 @@ export function EveConsole() {
                           <>
                             <p className="font-mono text-[0.62rem] uppercase tracking-[0.2em] text-[#5a708e]">Opened</p>
                             <p className="mt-1 truncate text-[0.85rem]">{action.description}</p>
+                          </>
+                        )}
+                        {action.type === "play_youtube" && (
+                          <>
+                            <p className="font-mono text-[0.62rem] uppercase tracking-[0.2em] text-[#5a708e]">Playing YouTube</p>
+                            <p className="mt-1 text-[0.85rem]">{action.title}</p>
+                            {action.channel && (
+                              <p className="mt-1 text-[0.78rem] text-[#5a708e]">{action.channel}</p>
+                            )}
                           </>
                         )}
                         {action.type === "set_reminder" && (

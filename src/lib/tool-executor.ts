@@ -6,6 +6,14 @@ type ToolResult = {
   clientAction?: ClientAction;
 };
 
+type YouTubeVideoResult = {
+  title: string;
+  channel: string;
+  videoId: string;
+  url: string;
+  published: string;
+};
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 async function getUserConfig(
@@ -70,6 +78,102 @@ async function readGoogleApiError(res: Response) {
       reason: null,
     };
   }
+}
+
+function getYouTubeSearchUrl(query: string) {
+  return `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+}
+
+function getYouTubeWatchUrl(videoId: string) {
+  return `https://www.youtube.com/watch?v=${videoId}`;
+}
+
+function extractYouTubeVideoId(rawValue: string) {
+  const value = rawValue.trim();
+  if (!value) return null;
+
+  if (/^[A-Za-z0-9_-]{11}$/.test(value)) {
+    return value;
+  }
+
+  try {
+    const url = new URL(value);
+    const hostname = url.hostname.toLowerCase();
+
+    if (hostname === "youtu.be") {
+      const candidate = url.pathname.replace(/^\/+/, "").split("/")[0];
+      return /^[A-Za-z0-9_-]{11}$/.test(candidate) ? candidate : null;
+    }
+
+    const vParam = url.searchParams.get("v");
+    if (vParam && /^[A-Za-z0-9_-]{11}$/.test(vParam)) {
+      return vParam;
+    }
+
+    const segments = url.pathname.split("/").filter(Boolean);
+    const specialIndex = segments.findIndex((segment) => segment === "embed" || segment === "shorts");
+    if (specialIndex >= 0) {
+      const candidate = segments[specialIndex + 1] ?? "";
+      return /^[A-Za-z0-9_-]{11}$/.test(candidate) ? candidate : null;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function youtubeSearchFallback(query: string, error: string): ToolResult {
+  const fallbackUrl = getYouTubeSearchUrl(query);
+  return {
+    toolOutput: {
+      error,
+      fallback_url: fallbackUrl,
+    },
+    clientAction: {
+      type: "open_url",
+      url: fallbackUrl,
+      description: `Search YouTube for ${query}`,
+    },
+  };
+}
+
+async function fetchYoutubeSearchResults(query: string, apiKey: string) {
+  const res = await fetch(
+    `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=5&q=${encodeURIComponent(query)}`,
+    {
+      headers: {
+        Accept: "application/json",
+        "x-goog-api-key": apiKey,
+      },
+    }
+  );
+
+  if (!res.ok) {
+    const googleError = await readGoogleApiError(res);
+    return {
+      error: googleError.message,
+      status: res.status,
+      reason: googleError.reason,
+    };
+  }
+
+  const data = (await res.json()) as {
+    items?: Array<{
+      id: { videoId: string };
+      snippet: { title: string; channelTitle: string; publishedAt: string };
+    }>;
+  };
+
+  const results: YouTubeVideoResult[] = (data.items ?? []).map((item) => ({
+    title: item.snippet.title,
+    channel: item.snippet.channelTitle,
+    videoId: item.id.videoId,
+    url: getYouTubeWatchUrl(item.id.videoId),
+    published: item.snippet.publishedAt?.slice(0, 10) ?? "",
+  }));
+
+  return { results };
 }
 
 function isPrivateHostname(hostname: string) {
@@ -585,70 +689,110 @@ async function searchYoutube(
   supabase: SupabaseClient
 ): Promise<ToolResult> {
   const query = String(args.query ?? "");
-  const youtubeSearchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
   const cfg = await getUserConfig(supabase, userId, "youtube");
 
   if (!cfg?.api_key) {
-    return {
-      toolOutput: {
-        error: "YouTube (Data API v3) is not connected. I opened YouTube search results instead.",
-        fallback_url: youtubeSearchUrl,
-      },
-      clientAction: {
-        type: "open_url",
-        url: youtubeSearchUrl,
-        description: `Search YouTube for ${query}`,
-      },
-    };
+    return youtubeSearchFallback(
+      query,
+      "YouTube (Data API v3) is not connected. I opened YouTube search results instead."
+    );
   }
 
-  const res = await fetch(
-    `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=5&q=${encodeURIComponent(query)}`,
-    {
-      headers: {
-        Accept: "application/json",
-        "x-goog-api-key": cfg.api_key,
-      },
-    }
-  );
-  if (!res.ok) {
-    const googleError = await readGoogleApiError(res);
+  const search = await fetchYoutubeSearchResults(query, cfg.api_key);
+  if ("error" in search) {
     const serviceBlocked =
-      res.status === 403 && googleError.reason === "API_KEY_SERVICE_BLOCKED";
+      search.status === 403 && search.reason === "API_KEY_SERVICE_BLOCKED";
 
+    return youtubeSearchFallback(
+      query,
+      serviceBlocked
+        ? "Your YouTube API key is blocked from calling YouTube Data API v3. In Google Cloud Console, enable YouTube Data API v3 and allow it under this key's API restrictions."
+        : (search.error ?? "YouTube search failed."),
+    );
+  }
+
+  return { toolOutput: { results: search.results } };
+}
+
+async function playYoutube(
+  args: Record<string, unknown>,
+  userId: string,
+  supabase: SupabaseClient
+): Promise<ToolResult> {
+  const title = String(args.title ?? "").trim();
+  const channel = String(args.channel ?? "").trim();
+  const explicitVideoId =
+    extractYouTubeVideoId(String(args.video_id ?? "")) ??
+    extractYouTubeVideoId(String(args.url ?? ""));
+
+  if (explicitVideoId) {
+    const url = getYouTubeWatchUrl(explicitVideoId);
     return {
       toolOutput: {
-        error: serviceBlocked
-          ? "Your YouTube API key is blocked from calling YouTube Data API v3. In Google Cloud Console, enable YouTube Data API v3 and allow it under this key's API restrictions."
-          : googleError.message,
-        status: res.status,
-        reason: googleError.reason,
-        fallback_url: youtubeSearchUrl,
+        playing: true,
+        title: title || "YouTube video",
+        channel,
+        videoId: explicitVideoId,
+        url,
       },
       clientAction: {
-        type: "open_url",
-        url: youtubeSearchUrl,
-        description: `Search YouTube for ${query}`,
+        type: "play_youtube",
+        videoId: explicitVideoId,
+        url,
+        title: title || "YouTube video",
+        channel,
       },
     };
   }
 
-  const data = (await res.json()) as {
-    items?: Array<{
-      id: { videoId: string };
-      snippet: { title: string; channelTitle: string; publishedAt: string };
-    }>;
+  const query = String(args.query ?? title).trim();
+  if (!query) {
+    return { toolOutput: { error: "Provide a YouTube query, URL, or video ID to play." } };
+  }
+
+  const cfg = await getUserConfig(supabase, userId, "youtube");
+  if (!cfg?.api_key) {
+    return youtubeSearchFallback(
+      query,
+      "YouTube (Data API v3) is not connected. I opened YouTube search results instead."
+    );
+  }
+
+  const search = await fetchYoutubeSearchResults(query, cfg.api_key);
+  if ("error" in search) {
+    const serviceBlocked =
+      search.status === 403 && search.reason === "API_KEY_SERVICE_BLOCKED";
+
+    return youtubeSearchFallback(
+      query,
+      serviceBlocked
+        ? "Your YouTube API key is blocked from calling YouTube Data API v3. In Google Cloud Console, enable YouTube Data API v3 and allow it under this key's API restrictions."
+        : (search.error ?? "YouTube search failed."),
+    );
+  }
+
+  const firstResult = search.results[0];
+  if (!firstResult) {
+    return youtubeSearchFallback(query, `No YouTube videos found for "${query}".`);
+  }
+
+  return {
+    toolOutput: {
+      playing: true,
+      title: firstResult.title,
+      channel: firstResult.channel,
+      videoId: firstResult.videoId,
+      url: firstResult.url,
+      published: firstResult.published,
+    },
+    clientAction: {
+      type: "play_youtube",
+      videoId: firstResult.videoId,
+      url: firstResult.url,
+      title: firstResult.title,
+      channel: firstResult.channel,
+    },
   };
-
-  const results = (data.items ?? []).map((item) => ({
-    title: item.snippet.title,
-    channel: item.snippet.channelTitle,
-    videoId: item.id.videoId,
-    url: `https://www.youtube.com/watch?v=${item.id.videoId}`,
-    published: item.snippet.publishedAt?.slice(0, 10),
-  }));
-
-  return { toolOutput: { results } };
 }
 
 async function generateImage(
@@ -1291,6 +1435,7 @@ export async function executeTool(
 
     // Media & Creation
     case "search_youtube": return searchYoutube(args, userId, supabase);
+    case "play_youtube": return playYoutube(args, userId, supabase);
     case "generate_image": return generateImage(args, userId, supabase);
 
     // Smart Home

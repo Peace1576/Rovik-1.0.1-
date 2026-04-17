@@ -2,6 +2,7 @@ import { FunctionDeclaration, Type } from "@google/genai";
 
 export type ClientAction =
   | { type: "open_url"; url: string; description: string }
+  | { type: "play_youtube"; videoId: string; url: string; title: string; channel?: string }
   | { type: "set_reminder"; message: string; delay_minutes: number }
   | { type: "write_clipboard"; text: string }
   | { type: "download_file"; filename: string; content: string; mimeType: string }
@@ -276,6 +277,20 @@ export const EVE_FUNCTION_DECLARATIONS: FunctionDeclaration[] = [
         query: { type: Type.STRING, description: "YouTube search query" },
       },
       required: ["query"],
+    },
+  },
+  {
+    name: "play_youtube",
+    description: "Play a YouTube video inside the app. Use when the user asks to watch or play a YouTube video, or when they confirm a result you already found.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        query: { type: Type.STRING, description: "Search query or exact video title to play." },
+        video_id: { type: Type.STRING, description: "Specific YouTube video ID if already known." },
+        url: { type: Type.STRING, description: "Specific YouTube watch URL if already known." },
+        title: { type: Type.STRING, description: "Video title for display if already known." },
+        channel: { type: Type.STRING, description: "Channel name for display if already known." },
+      },
     },
   },
   {

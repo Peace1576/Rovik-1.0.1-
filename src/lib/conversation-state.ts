@@ -189,6 +189,30 @@ function looksLikeStandaloneRequest(text: string) {
   );
 }
 
+function extractCorrectedMediaQuery(text: string) {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+
+  const patterns = [
+    /^i meant\s+/i,
+    /^i mean\s+/i,
+    /^no[, ]+i just need you to\s+/i,
+    /^no[, ]+/i,
+    /^not that[, ]*/i,
+    /^something else[, ]*/i,
+    /^instead[, ]*/i,
+  ];
+
+  for (const pattern of patterns) {
+    if (pattern.test(trimmed)) {
+      const candidate = trimmed.replace(pattern, "").trim();
+      return candidate || null;
+    }
+  }
+
+  return null;
+}
+
 function formatPendingItem(item: PendingMediaItem, index: number) {
   const byline = item.channel || item.artists ? ` by ${item.channel ?? item.artists}` : "";
   const locator = item.videoId
@@ -249,6 +273,29 @@ export function getResolvedPendingMedia(
   return resolvePendingMediaReply(pending, latestUserMessage);
 }
 
+export function getPendingMediaCorrection(
+  state: ConversationState,
+  latestUserMessage: string,
+) {
+  const pending = state.pendingMediaSelection;
+  if (!pending) return null;
+
+  const query = extractCorrectedMediaQuery(latestUserMessage);
+  if (!query) return null;
+
+  return {
+    source: pending.source,
+    query,
+  };
+}
+
+export function shouldResetPendingMediaSelection(
+  state: ConversationState,
+  latestUserMessage: string,
+) {
+  return Boolean(state.pendingMediaSelection) && looksLikeStandaloneRequest(latestUserMessage);
+}
+
 export function deriveConversationState(
   previousState: ConversationState,
   events: ToolExecutionEvent[],
@@ -271,6 +318,8 @@ export function deriveConversationState(
           items: results,
           updatedAt: new Date().toISOString(),
         };
+      } else {
+        nextState.pendingMediaSelection = null;
       }
     }
 
@@ -291,6 +340,8 @@ export function deriveConversationState(
           items: results,
           updatedAt: new Date().toISOString(),
         };
+      } else {
+        nextState.pendingMediaSelection = null;
       }
     }
 

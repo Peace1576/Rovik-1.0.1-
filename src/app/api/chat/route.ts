@@ -5,8 +5,10 @@ import { jsonNoStore, rejectCrossSiteRequest } from "@/lib/api-security";
 import {
   buildConversationContextInstruction,
   deriveConversationState,
+  getPendingMediaCorrection,
   getResolvedPendingMedia,
   normalizeConversationState,
+  shouldResetPendingMediaSelection,
   type ToolExecutionEvent,
 } from "@/lib/conversation-state";
 import { eveSystemPrompt } from "@/lib/eve-system-prompt";
@@ -61,6 +63,49 @@ function buildOfflineReply(input: string) {
   return `I'm running in offline demo mode because GEMINI_API_KEY is missing. Add that environment variable and I'll answer live. For now, start by clarifying the goal behind: "${input}"`;
 }
 
+function formatMediaSearchReply(
+  source: "youtube" | "spotify",
+  query: string,
+  toolOutput: Record<string, unknown>,
+) {
+  if (toolOutput.error) {
+    return String(toolOutput.error);
+  }
+
+  const results = Array.isArray(toolOutput.results)
+    ? (toolOutput.results as Array<Record<string, unknown>>)
+    : [];
+
+  if (results.length === 0) {
+    return source === "youtube"
+      ? `I couldn't find any YouTube results for "${query}".`
+      : `I couldn't find any Spotify results for "${query}".`;
+  }
+
+  const label = source === "youtube" ? "video" : "result";
+  if (results.length === 1) {
+    const first = results[0];
+    const title = String(first.title ?? first.name ?? "that");
+    const byline = String(first.channel ?? first.artists ?? "").trim();
+    return byline
+      ? `I found one ${label}: "${title}" by ${byline}. Do you want me to play it?`
+      : `I found one ${label}: "${title}". Do you want me to play it?`;
+  }
+
+  const formatted = results
+    .slice(0, 3)
+    .map((item, index) => {
+      const title = String(item.title ?? item.name ?? "Untitled");
+      const byline = String(item.channel ?? item.artists ?? "").trim();
+      return byline
+        ? `${index + 1}. "${title}" by ${byline}`
+        : `${index + 1}. "${title}"`;
+    })
+    .join("\n");
+
+  return `Here are a few ${source} results for "${query}":\n${formatted}\n\nWhich one would you like?`;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const forbidden = rejectCrossSiteRequest(request);
@@ -83,7 +128,7 @@ export async function POST(request: NextRequest) {
       return jsonNoStore({ error: "Invalid JSON body." }, 400);
     }
     const messages = sanitizeMessages(body.messages);
-    const conversationState = normalizeConversationState(body.state);
+    const normalizedState = normalizeConversationState(body.state);
     const latestUserMessage =
       [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
 
@@ -94,13 +139,20 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const activeConversationState = shouldResetPendingMediaSelection(
+      normalizedState,
+      latestUserMessage,
+    )
+      ? { pendingMediaSelection: null }
+      : normalizedState;
+
     const resolvedPendingMedia = getResolvedPendingMedia(
-      conversationState,
+      activeConversationState,
       latestUserMessage,
     );
 
-    if (resolvedPendingMedia && conversationState.pendingMediaSelection) {
-      const pending = conversationState.pendingMediaSelection;
+    if (resolvedPendingMedia && activeConversationState.pendingMediaSelection) {
+      const pending = activeConversationState.pendingMediaSelection;
       const item = resolvedPendingMedia.item;
       const toolName = pending.source === "youtube" ? "play_youtube" : "spotify_play";
       const toolArgs =
@@ -133,7 +185,7 @@ export async function POST(request: NextRequest) {
         },
       ];
       const nextConversationState = deriveConversationState(
-        conversationState,
+        activeConversationState,
         toolEvents,
       );
 
@@ -148,6 +200,52 @@ export async function POST(request: NextRequest) {
       return jsonNoStore({
         mode: "live",
         reply,
+        actions,
+        state: nextConversationState,
+      });
+    }
+
+    const pendingMediaCorrection = getPendingMediaCorrection(
+      activeConversationState,
+      latestUserMessage,
+    );
+
+    if (pendingMediaCorrection) {
+      const toolName =
+        pendingMediaCorrection.source === "youtube" ? "search_youtube" : "spotify_search";
+      const toolArgs =
+        pendingMediaCorrection.source === "youtube"
+          ? { query: pendingMediaCorrection.query }
+          : { query: pendingMediaCorrection.query, type: "track" };
+
+      const { toolOutput, clientAction } = await executeTool(
+        toolName,
+        toolArgs,
+        userId,
+        supabase,
+      );
+
+      const actions = clientAction ? [clientAction] : [];
+      const toolEvents: ToolExecutionEvent[] = [
+        {
+          name: toolName,
+          args: toolArgs,
+          toolOutput,
+          clientAction,
+        },
+      ];
+      const nextConversationState = deriveConversationState(
+        { pendingMediaSelection: null },
+        toolEvents,
+      );
+
+      return jsonNoStore({
+        mode: "live",
+        reply: formatMediaSearchReply(
+          pendingMediaCorrection.source,
+          pendingMediaCorrection.query,
+          toolOutput,
+        ),
         actions,
         state: nextConversationState,
       });
@@ -168,12 +266,12 @@ export async function POST(request: NextRequest) {
         mode: "offline",
         reply: buildOfflineReply(latestUserMessage),
         actions: [],
-        state: conversationState,
+        state: activeConversationState,
       });
     }
 
     const turnContextInstruction = buildConversationContextInstruction(
-      conversationState,
+      activeConversationState,
       latestUserMessage,
     );
     const activeSystemInstruction = turnContextInstruction
@@ -274,7 +372,7 @@ export async function POST(request: NextRequest) {
     }
 
     const nextConversationState = deriveConversationState(
-      conversationState,
+      activeConversationState,
       toolEvents,
     );
 

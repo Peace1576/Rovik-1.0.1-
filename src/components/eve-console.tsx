@@ -169,6 +169,10 @@ export function EveConsole() {
   const wakeLastEventRef = useRef(0);
   const interimTranscriptRef = useRef("");
   const wakeWatchdogRef = useRef<number | null>(null);
+  const listeningStartedAtRef = useRef(0);
+  const heardSpeechSinceListenRef = useRef(false);
+  const initialListenWindowRef = useRef(7000);
+  const trailingSilenceWindowRef = useRef(3500);
   const lastSpeechRef = useRef(0);
   const finalTranscriptRef = useRef("");
   const silenceRafRef = useRef<number | null>(null);
@@ -331,12 +335,12 @@ export function EveConsole() {
   // If nobody speaks within 3.5s, close the window and return to wake-word standby.
   function startPostReplyListen() {
     if (voiceStateRef.current !== "standby") return; // wake word off or already listening
-    startActiveListening();
+    startActiveListening("", "followup");
 
     postReplyTimerRef.current = window.setTimeout(() => {
       postReplyTimerRef.current = null;
       // Only close the window if the user still hasn't said anything
-      if (voiceStateRef.current === "listening" && !finalTranscriptRef.current.trim()) {
+      if (voiceStateRef.current === "listening" && !hasCapturedActiveSpeech()) {
         stopActiveListening();
         setVoiceSynced("standby");
         // Delay so Chrome fully releases the mic before we try to reopen it
@@ -473,6 +477,22 @@ export function EveConsole() {
     setVoiceState(state);
   }
 
+  function hasSpeechSignal(text: string) {
+    return text.replace(/[^a-z0-9]/gi, "").length >= 2;
+  }
+
+  function hasUsableSpeech(text: string) {
+    return text.replace(/[^a-z0-9]/gi, "").length >= 4;
+  }
+
+  function hasCapturedActiveSpeech() {
+    return (
+      heardSpeechSinceListenRef.current ||
+      hasSpeechSignal(finalTranscriptRef.current) ||
+      hasSpeechSignal(interimTranscriptRef.current)
+    );
+  }
+
   function stopSilenceRaf() {
     if (silenceRafRef.current) {
       cancelAnimationFrame(silenceRafRef.current);
@@ -488,6 +508,8 @@ export function EveConsole() {
     setInterimTranscript("");
     interimTranscriptRef.current = "";
     finalTranscriptRef.current = "";
+    listeningStartedAtRef.current = 0;
+    heardSpeechSinceListenRef.current = false;
     if (postReplyTimerRef.current) {
       window.clearTimeout(postReplyTimerRef.current);
       postReplyTimerRef.current = null;
@@ -497,7 +519,7 @@ export function EveConsole() {
   function autoSubmit() {
     const finalText = finalTranscriptRef.current.trim();
     const interimText = interimTranscriptRef.current.trim();
-    const text = finalText || (interimText.length >= 4 ? interimText : "");
+    const text = finalText || (hasUsableSpeech(interimText) ? interimText : "");
     stopActiveListening();
     setVoiceSynced("standby");
     window.setTimeout(startWakeWordListener, 350); // delay so Chrome releases mic first
@@ -509,16 +531,22 @@ export function EveConsole() {
 
   function startSilenceDetection() {
     stopSilenceRaf();
-    const SILENCE_MS = 3500;
 
     const tick = () => {
       if (voiceStateRef.current !== "listening") return;
-      const elapsed = Date.now() - lastSpeechRef.current;
-      const progress = Math.min(1, elapsed / SILENCE_MS);
+      const waitingForFirstSpeech = !hasCapturedActiveSpeech();
+      const deadlineMs = waitingForFirstSpeech
+        ? initialListenWindowRef.current
+        : trailingSilenceWindowRef.current;
+      const startedAt = waitingForFirstSpeech
+        ? listeningStartedAtRef.current || lastSpeechRef.current
+        : lastSpeechRef.current;
+      const elapsed = Date.now() - startedAt;
+      const progress = Math.min(1, elapsed / deadlineMs);
       setSilenceProgress(progress);
       if (progress >= 1) {
         const hasFinalText = Boolean(finalTranscriptRef.current.trim());
-        const hasUsableInterim = interimTranscriptRef.current.trim().length >= 4;
+        const hasUsableInterim = hasUsableSpeech(interimTranscriptRef.current.trim());
         if (hasFinalText || hasUsableInterim) {
           autoSubmit();
         } else {
@@ -533,9 +561,13 @@ export function EveConsole() {
     silenceRafRef.current = requestAnimationFrame(tick);
   }
 
-  function startActiveListening(seedText = "") {
+  function startActiveListening(
+    seedText = "",
+    mode: "wake" | "manual" | "followup" = "manual",
+  ) {
     const SR = getSR();
     if (!SR) return;
+    const trimmedSeed = seedText.trim();
 
     // Chrome only allows one SpeechRecognition at a time — stop the wake word
     // listener before starting active recording to avoid immediate error/close.
@@ -544,10 +576,14 @@ export function EveConsole() {
 
     stopActiveListening();
     setVoiceSynced("listening");
-    finalTranscriptRef.current = seedText;
+    finalTranscriptRef.current = trimmedSeed ? `${trimmedSeed} ` : "";
     lastSpeechRef.current = Date.now();
-    setInterimTranscript(seedText);
-    interimTranscriptRef.current = seedText;
+    listeningStartedAtRef.current = Date.now();
+    heardSpeechSinceListenRef.current = hasSpeechSignal(trimmedSeed);
+    initialListenWindowRef.current = mode === "followup" ? 4500 : 8000;
+    trailingSilenceWindowRef.current = 3500;
+    setInterimTranscript(trimmedSeed);
+    interimTranscriptRef.current = trimmedSeed;
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rec = new SR() as any;
@@ -559,7 +595,9 @@ export function EveConsole() {
     // user gets the full silence window — not a shortened one due to Chrome
     // taking time to initialise the new recognition instance.
     rec.onstart = () => {
-      lastSpeechRef.current = Date.now();
+      const now = Date.now();
+      lastSpeechRef.current = now;
+      listeningStartedAtRef.current = now;
       startSilenceDetection();
     };
 
@@ -577,8 +615,14 @@ export function EveConsole() {
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const t = e.results[i][0].transcript;
         if (e.results[i].isFinal) {
+          if (hasSpeechSignal(t)) {
+            heardSpeechSinceListenRef.current = true;
+          }
           finalTranscriptRef.current += t + " ";
         } else {
+          if (hasSpeechSignal(t)) {
+            heardSpeechSinceListenRef.current = true;
+          }
           interim += t;
         }
       }
@@ -655,7 +699,7 @@ export function EveConsole() {
           triggered = true;
           const afterWake = match[1]?.trim() ?? "";
           rec.stop();
-          startActiveListening(afterWake);
+          startActiveListening(afterWake, "wake");
           return;
         }
       }
@@ -736,7 +780,7 @@ export function EveConsole() {
       if (next === "standby") window.setTimeout(startWakeWordListener, 350);
     } else {
       wakeRecogRef.current?.stop();
-      startActiveListening();
+      startActiveListening("", "manual");
     }
   }
 

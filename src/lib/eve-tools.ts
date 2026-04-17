@@ -396,4 +396,152 @@ export const EVE_FUNCTION_DECLARATIONS: FunctionDeclaration[] = [
       required: ["command"],
     },
   },
+
+  // ── Home Operations (bills, subscriptions, household memory) ──────────────
+  {
+    name: "get_morning_brief",
+    description: "Generate the user's Morning Home Brief: weather, today's calendar, bills due soon, flagged subscriptions, and unread inbox count. Use at the start of the day or when the user asks for a brief/recap.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        location: { type: Type.STRING, description: "City for weather. Optional — falls back to user's saved preference." },
+      },
+    },
+  },
+  {
+    name: "add_bill",
+    description: "Record a household bill (utility, rent, insurance, etc.).",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        name: { type: Type.STRING },
+        amount: { type: Type.NUMBER },
+        currency: { type: Type.STRING, description: "ISO 4217 code, default USD" },
+        due_date: { type: Type.STRING, description: "YYYY-MM-DD" },
+        recurrence: { type: Type.STRING, description: "'monthly' | 'quarterly' | 'annual' | 'once'" },
+        vendor: { type: Type.STRING },
+        category: { type: Type.STRING },
+        notes: { type: Type.STRING },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "get_bills",
+    description: "List the user's bills, optionally filtered by status or a due-by date.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        status: { type: Type.STRING, description: "'pending' | 'paid' | 'overdue' | 'skipped' | 'all'" },
+        due_before: { type: Type.STRING, description: "YYYY-MM-DD — only return bills due on or before this date" },
+      },
+    },
+  },
+  {
+    name: "mark_bill_paid",
+    description: "Mark a bill as paid. Identify by id or name.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        id: { type: Type.STRING },
+        name: { type: Type.STRING },
+      },
+    },
+  },
+  {
+    name: "add_subscription",
+    description: "Record a recurring subscription (streaming, SaaS, membership).",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        name: { type: Type.STRING },
+        amount: { type: Type.NUMBER },
+        currency: { type: Type.STRING },
+        billing_cycle: { type: Type.STRING, description: "'monthly' | 'annual' | 'weekly'" },
+        next_charge_date: { type: Type.STRING, description: "YYYY-MM-DD" },
+        vendor: { type: Type.STRING },
+        status: { type: Type.STRING, description: "'active' | 'trial' | 'cancel_pending' | 'canceled'" },
+        notes: { type: Type.STRING },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "get_subscriptions",
+    description: "List the user's subscriptions, optionally filtered by status or flagged-for-review.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        status: { type: Type.STRING },
+        flagged_only: { type: Type.BOOLEAN },
+      },
+    },
+  },
+  {
+    name: "flag_subscription_for_cancel",
+    description: "Flag a subscription for the user to review and cancel. Does NOT cancel it — cancellation requires user approval + an open_url to the vendor.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        id: { type: Type.STRING },
+        name: { type: Type.STRING },
+        reason: { type: Type.STRING },
+      },
+    },
+  },
+  {
+    name: "scan_inbox_for_bills",
+    description: "Scan recent Gmail for bills, receipts, and subscription renewals, and return candidates the user can confirm to add. Requires Google OAuth.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        days_back: { type: Type.NUMBER, description: "How many days of inbox to scan (default 30)" },
+      },
+    },
+  },
+  {
+    name: "add_routine",
+    description: "Save a recurring household routine (bedtime mode, trash day, weekly cleanup).",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        name: { type: Type.STRING },
+        schedule: { type: Type.STRING, description: "Natural-language schedule, e.g. 'every Sunday 9pm'" },
+        steps: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING },
+          description: "Ordered steps Eve should run or remind.",
+        },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "get_routines",
+    description: "List saved household routines.",
+    parameters: { type: Type.OBJECT, properties: {} },
+  },
+  {
+    name: "get_action_history",
+    description: "Return Eve's recent actions with status (pending_approval, executed, failed). Use when the user asks what you did or for an activity log.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        limit: { type: Type.NUMBER, description: "Max rows to return, default 20" },
+        status: { type: Type.STRING, description: "Filter by status. Optional." },
+      },
+    },
+  },
+  {
+    name: "confirm_pending_action",
+    description: "Approve or deny a previously proposed risky action by its action-history id.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        action_id: { type: Type.STRING },
+        decision: { type: Type.STRING, description: "'approve' | 'deny'" },
+      },
+      required: ["action_id", "decision"],
+    },
+  },
 ];

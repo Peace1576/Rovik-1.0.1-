@@ -987,6 +987,197 @@ function draftEmail(args: Record<string, unknown>): ToolResult {
   };
 }
 
+// ── Home Operations ────────────────────────────────────────────────────────
+
+async function addBill(args: Record<string, unknown>, userId: string, supabase: SupabaseClient): Promise<ToolResult> {
+  const row = {
+    user_id: userId,
+    name: String(args.name ?? "").trim(),
+    amount: args.amount != null ? Number(args.amount) : null,
+    currency: String(args.currency ?? "USD"),
+    due_date: (args.due_date as string) || null,
+    recurrence: (args.recurrence as string) || null,
+    vendor: (args.vendor as string) || null,
+    category: (args.category as string) || null,
+    notes: (args.notes as string) || null,
+    source: "manual",
+  };
+  if (!row.name) return { toolOutput: { error: "name required" } };
+  const { data, error } = await supabase.from("bills").insert(row).select().single();
+  if (error) return { toolOutput: { error: error.message } };
+  return { toolOutput: { status: "saved", bill: data } };
+}
+
+async function getBills(args: Record<string, unknown>, userId: string, supabase: SupabaseClient): Promise<ToolResult> {
+  let q = supabase.from("bills").select("*").eq("user_id", userId).order("due_date", { ascending: true });
+  const status = (args.status as string) || "pending";
+  if (status !== "all") q = q.eq("status", status);
+  if (args.due_before) q = q.lte("due_date", args.due_before as string);
+  const { data, error } = await q.limit(50);
+  if (error) return { toolOutput: { error: error.message } };
+  return { toolOutput: { bills: data ?? [] } };
+}
+
+async function markBillPaid(args: Record<string, unknown>, userId: string, supabase: SupabaseClient): Promise<ToolResult> {
+  let q = supabase.from("bills").update({ status: "paid", updated_at: new Date().toISOString() }).eq("user_id", userId);
+  if (args.id) q = q.eq("id", args.id as string);
+  else if (args.name) q = q.ilike("name", String(args.name));
+  else return { toolOutput: { error: "id or name required" } };
+  const { data, error } = await q.select();
+  if (error) return { toolOutput: { error: error.message } };
+  return { toolOutput: { status: "updated", bills: data ?? [] } };
+}
+
+async function addSubscription(args: Record<string, unknown>, userId: string, supabase: SupabaseClient): Promise<ToolResult> {
+  const row = {
+    user_id: userId,
+    name: String(args.name ?? "").trim(),
+    amount: args.amount != null ? Number(args.amount) : null,
+    currency: String(args.currency ?? "USD"),
+    billing_cycle: (args.billing_cycle as string) || null,
+    next_charge_date: (args.next_charge_date as string) || null,
+    vendor: (args.vendor as string) || null,
+    status: (args.status as string) || "active",
+    notes: (args.notes as string) || null,
+  };
+  if (!row.name) return { toolOutput: { error: "name required" } };
+  const { data, error } = await supabase.from("subscriptions").insert(row).select().single();
+  if (error) return { toolOutput: { error: error.message } };
+  return { toolOutput: { status: "saved", subscription: data } };
+}
+
+async function getSubscriptions(args: Record<string, unknown>, userId: string, supabase: SupabaseClient): Promise<ToolResult> {
+  let q = supabase.from("subscriptions").select("*").eq("user_id", userId).order("next_charge_date", { ascending: true });
+  if (args.status) q = q.eq("status", args.status as string);
+  if (args.flagged_only) q = q.eq("flagged_for_review", true);
+  const { data, error } = await q.limit(100);
+  if (error) return { toolOutput: { error: error.message } };
+  return { toolOutput: { subscriptions: data ?? [] } };
+}
+
+async function flagSubscriptionForCancel(args: Record<string, unknown>, userId: string, supabase: SupabaseClient): Promise<ToolResult> {
+  let q = supabase.from("subscriptions").update({
+    flagged_for_review: true,
+    notes: args.reason ? `Flagged: ${args.reason}` : null,
+    updated_at: new Date().toISOString(),
+  }).eq("user_id", userId);
+  if (args.id) q = q.eq("id", args.id as string);
+  else if (args.name) q = q.ilike("name", String(args.name));
+  else return { toolOutput: { error: "id or name required" } };
+  const { data, error } = await q.select();
+  if (error) return { toolOutput: { error: error.message } };
+  return { toolOutput: { status: "flagged", subscriptions: data ?? [] } };
+}
+
+async function scanInboxForBills(args: Record<string, unknown>, userId: string, supabase: SupabaseClient): Promise<ToolResult> {
+  const token = await getGoogleAccessToken(supabase, userId);
+  if (!token) return { toolOutput: { error: "Google not connected. Link it in Settings." } };
+  const days = Number(args.days_back ?? 30);
+  const q = encodeURIComponent(`newer_than:${days}d (invoice OR receipt OR "payment due" OR subscription OR renewal OR "auto-pay")`);
+  const res = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=25&q=${q}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return { toolOutput: { error: `Gmail ${res.status}` } };
+  const list = await res.json() as { messages?: Array<{ id: string }> };
+  const candidates: Array<{ id: string; from: string; subject: string; date: string; snippet: string }> = [];
+  for (const m of (list.messages ?? []).slice(0, 15)) {
+    const r = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${m.id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!r.ok) continue;
+    const msg = await r.json() as { payload?: { headers?: Array<{ name: string; value: string }> }; snippet?: string };
+    const h = Object.fromEntries((msg.payload?.headers ?? []).map(x => [x.name, x.value]));
+    candidates.push({
+      id: m.id,
+      from: h.From ?? "",
+      subject: h.Subject ?? "",
+      date: h.Date ?? "",
+      snippet: msg.snippet ?? "",
+    });
+  }
+  return { toolOutput: { candidates, note: "Confirm any you want saved as bills or subscriptions." } };
+}
+
+async function addRoutine(args: Record<string, unknown>, userId: string, supabase: SupabaseClient): Promise<ToolResult> {
+  const row = {
+    user_id: userId,
+    name: String(args.name ?? "").trim(),
+    schedule: (args.schedule as string) || null,
+    steps: Array.isArray(args.steps) ? args.steps : [],
+  };
+  if (!row.name) return { toolOutput: { error: "name required" } };
+  const { data, error } = await supabase.from("routines").insert(row).select().single();
+  if (error) return { toolOutput: { error: error.message } };
+  return { toolOutput: { status: "saved", routine: data } };
+}
+
+async function getRoutines(userId: string, supabase: SupabaseClient): Promise<ToolResult> {
+  const { data, error } = await supabase.from("routines").select("*").eq("user_id", userId).order("created_at", { ascending: false });
+  if (error) return { toolOutput: { error: error.message } };
+  return { toolOutput: { routines: data ?? [] } };
+}
+
+async function getActionHistory(args: Record<string, unknown>, userId: string, supabase: SupabaseClient): Promise<ToolResult> {
+  let q = supabase.from("action_history").select("*").eq("user_id", userId).order("created_at", { ascending: false });
+  if (args.status) q = q.eq("status", args.status as string);
+  const { data, error } = await q.limit(Number(args.limit ?? 20));
+  if (error) return { toolOutput: { error: error.message } };
+  return { toolOutput: { actions: data ?? [] } };
+}
+
+async function confirmPendingAction(args: Record<string, unknown>, userId: string, supabase: SupabaseClient): Promise<ToolResult> {
+  const decision = String(args.decision ?? "").toLowerCase();
+  if (decision !== "approve" && decision !== "deny") {
+    return { toolOutput: { error: "decision must be 'approve' or 'deny'" } };
+  }
+  const { data, error } = await supabase.from("action_history").update({
+    status: decision === "approve" ? "approved" : "denied",
+    approved_at: decision === "approve" ? new Date().toISOString() : null,
+  }).eq("user_id", userId).eq("id", args.action_id as string).select().single();
+  if (error) return { toolOutput: { error: error.message } };
+  return { toolOutput: { status: decision, action: data } };
+}
+
+async function getMorningBrief(args: Record<string, unknown>, userId: string, supabase: SupabaseClient): Promise<ToolResult> {
+  const today = new Date().toISOString().slice(0, 10);
+  const weekAhead = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+
+  const [billsRes, subsRes] = await Promise.all([
+    supabase.from("bills").select("name,amount,currency,due_date,status").eq("user_id", userId).eq("status", "pending").lte("due_date", weekAhead).order("due_date", { ascending: true }).limit(10),
+    supabase.from("subscriptions").select("name,amount,currency,next_charge_date,flagged_for_review").eq("user_id", userId).or("flagged_for_review.eq.true,next_charge_date.lte." + weekAhead).limit(10),
+  ]);
+
+  let weather: unknown = null;
+  if (args.location) {
+    const w = await getWeather({ location: args.location }, userId, supabase);
+    weather = w.toolOutput;
+  }
+
+  let calendar: unknown = null;
+  const token = await getGoogleAccessToken(supabase, userId);
+  if (token) {
+    const timeMin = new Date().toISOString();
+    const timeMax = new Date(Date.now() + 86400000).toISOString();
+    const r = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}&singleEvents=true&orderBy=startTime&maxResults=8`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (r.ok) {
+      const j = await r.json() as { items?: Array<{ summary?: string; start?: { dateTime?: string; date?: string } }> };
+      calendar = (j.items ?? []).map(e => ({ title: e.summary, start: e.start?.dateTime ?? e.start?.date }));
+    }
+  }
+
+  return {
+    toolOutput: {
+      date: today,
+      weather,
+      calendar_today: calendar,
+      bills_due_this_week: billsRes.data ?? [],
+      subscriptions_to_watch: subsRes.data ?? [],
+    },
+  };
+}
+
 // ── Main dispatcher ────────────────────────────────────────────────────────
 
 export async function executeTool(
@@ -1054,6 +1245,20 @@ export async function executeTool(
     case "spotify_search": return spotifySearch(args, userId, supabase);
     case "spotify_play": return spotifyPlay(args, userId, supabase);
     case "spotify_control": return spotifyControl(args, userId, supabase);
+
+    // Home Operations
+    case "get_morning_brief": return getMorningBrief(args, userId, supabase);
+    case "add_bill": return addBill(args, userId, supabase);
+    case "get_bills": return getBills(args, userId, supabase);
+    case "mark_bill_paid": return markBillPaid(args, userId, supabase);
+    case "add_subscription": return addSubscription(args, userId, supabase);
+    case "get_subscriptions": return getSubscriptions(args, userId, supabase);
+    case "flag_subscription_for_cancel": return flagSubscriptionForCancel(args, userId, supabase);
+    case "scan_inbox_for_bills": return scanInboxForBills(args, userId, supabase);
+    case "add_routine": return addRoutine(args, userId, supabase);
+    case "get_routines": return getRoutines(userId, supabase);
+    case "get_action_history": return getActionHistory(args, userId, supabase);
+    case "confirm_pending_action": return confirmPendingAction(args, userId, supabase);
 
     default:
       return { toolOutput: { error: `Unknown tool: ${name}` } };

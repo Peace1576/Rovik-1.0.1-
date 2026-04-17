@@ -15,7 +15,7 @@ type ServiceDef = {
   section: string;
   fields: { key: string; label: string; placeholder: string; type?: string }[];
   docsUrl?: string;
-  oauthProvider?: "google" | "spotify";
+  oauthProvider?: "google" | "spotify" | "smartthings";
 };
 
 const SERVICES: ServiceDef[] = [
@@ -139,6 +139,19 @@ const SERVICES: ServiceDef[] = [
     ],
     docsUrl: "https://developer.spotify.com/dashboard",
     oauthProvider: "spotify",
+  },
+  {
+    id: "smartthings",
+    label: "SmartThings",
+    emoji: "🏠",
+    description: "Control Samsung SmartThings lights, locks, thermostats, and routines. Create a SmartThings API integration, then authorize via OAuth.",
+    section: "Smart Home",
+    fields: [
+      { key: "client_id", label: "Client ID", placeholder: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx", type: "text" },
+      { key: "client_secret", label: "Client Secret", placeholder: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" },
+    ],
+    docsUrl: "https://developer.smartthings.com/workspace",
+    oauthProvider: "smartthings",
   },
 ];
 
@@ -397,7 +410,7 @@ function SettingsInner() {
                         href={`/api/oauth/${service.oauthProvider}`}
                         className="block w-full rounded-[1.2rem] border border-[#0b74ff]/40 bg-[rgba(11,116,255,0.06)] px-4 py-2.5 text-center text-sm font-semibold text-[#0b74ff] transition hover:bg-[rgba(11,116,255,0.12)]"
                       >
-                        Authorize with {service.oauthProvider === "google" ? "Google" : "Spotify"} →
+                        Authorize with {service.oauthProvider === "google" ? "Google" : service.oauthProvider === "spotify" ? "Spotify" : "SmartThings"} →
                       </a>
                     )}
 

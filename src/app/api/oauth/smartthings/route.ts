@@ -7,6 +7,8 @@ import {
 } from "@/lib/api-security";
 import { createClient } from "@/lib/supabase/server";
 
+// SmartThings consumer OAuth: authorization-code flow.
+// Docs: https://developer.smartthings.com/docs/connected-services/hosting/authorization-code-flow
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const {
@@ -23,7 +25,7 @@ export async function GET(request: NextRequest) {
     .from("user_integrations")
     .select("config")
     .eq("user_id", user.id)
-    .eq("service", "google")
+    .eq("service", "smartthings")
     .single();
 
   const config = (data?.config as Record<string, string>) ?? {};
@@ -31,24 +33,28 @@ export async function GET(request: NextRequest) {
 
   if (!clientId) {
     const settingsUrl = new URL("/settings", appOrigin);
-    settingsUrl.searchParams.set("error", "Save your Google client_id and client_secret in Settings first.");
+    settingsUrl.searchParams.set(
+      "error",
+      "Save your SmartThings client_id and client_secret in Settings first.",
+    );
     return NextResponse.redirect(settingsUrl);
   }
 
-  const redirectUri = `${appOrigin}/api/oauth/google/callback`;
+  const redirectUri = `${appOrigin}/api/oauth/smartthings/callback`;
   const state = createOAuthState();
 
   const params = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: "code",
-    scope: "openid email https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events",
-    access_type: "offline",
-    prompt: "consent",
+    // Narrow scopes — read devices + control switches/locks/thermostats.
+    scope: "r:devices:* x:devices:* r:locations:*",
     state,
   });
 
-  const response = NextResponse.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
-  setOAuthStateCookie(response, request, "google", state);
+  const response = NextResponse.redirect(
+    `https://api.smartthings.com/oauth/authorize?${params.toString()}`,
+  );
+  setOAuthStateCookie(response, request, "smartthings", state);
   return response;
 }

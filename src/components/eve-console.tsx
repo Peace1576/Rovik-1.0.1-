@@ -1022,38 +1022,19 @@ export function EveConsole() {
 
               <section className="glass-panel rounded-[2rem] px-5 py-5">
                 <p className="font-mono text-[0.68rem] uppercase tracking-[0.3em] text-[#63758e]">
-                  Draft intent
+                  Six core workflows
                 </p>
-                <p className="mt-3 text-sm leading-7 text-[#31425a]">
-                  {deferredPrompt ||
-                    "Ask for a morning brief, bill review, subscription cleanup, grocery or task planning, purchase research, or household automation."}
-                </p>
-              </section>
-
-              <section className="glass-panel rounded-[2rem] px-5 py-5">
-                <p className="font-mono text-[0.68rem] uppercase tracking-[0.3em] text-[#63758e]">
-                  Live state
-                </p>
-                <ul className="mt-3 space-y-3 text-sm text-[#31425a]">
-                  <li className="flex items-center justify-between gap-3">
-                    <span>Voice engine</span>
-                    <span className="font-mono uppercase tracking-[0.16em] text-[#5a708e]">
-                      {muted ? "Muted" : "Browser TTS"}
-                    </span>
-                  </li>
-                  <li className="flex items-center justify-between gap-3">
-                    <span>Avatar mood</span>
-                    <span className="font-mono uppercase tracking-[0.16em] text-[#5a708e]">
-                      {mood}
-                    </span>
-                  </li>
-                  <li className="flex items-center justify-between gap-3">
-                    <span>Current engine</span>
-                    <span className="font-mono uppercase tracking-[0.16em] text-[#5a708e]">
-                      {modelMode}
-                    </span>
-                  </li>
+                <ul className="mt-3 grid grid-cols-2 gap-2 text-[0.78rem] text-[#31425a]">
+                  <li className="rounded-xl border border-white/60 bg-white/60 px-3 py-2">🌅 Morning Brief</li>
+                  <li className="rounded-xl border border-white/60 bg-white/60 px-3 py-2">📥 Inbox Triage</li>
+                  <li className="rounded-xl border border-white/60 bg-white/60 px-3 py-2">💸 Bills &amp; Subs</li>
+                  <li className="rounded-xl border border-white/60 bg-white/60 px-3 py-2">✅ Home Tasks</li>
+                  <li className="rounded-xl border border-white/60 bg-white/60 px-3 py-2">💡 Smart Home</li>
+                  <li className="rounded-xl border border-white/60 bg-white/60 px-3 py-2">🛒 Purchases</li>
                 </ul>
+                <p className="mt-3 text-[0.72rem] text-[#63758e]">
+                  Risky actions (send email, event invites, purchases, cancels, door unlocks) always ask before running.
+                </p>
               </section>
 
               {generatedImage && (

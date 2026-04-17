@@ -49,6 +49,29 @@ function escapeHtml(text: string) {
     .replace(/'/g, "&#39;");
 }
 
+async function readGoogleApiError(res: Response) {
+  try {
+    const data = (await res.json()) as {
+      error?: {
+        message?: string;
+        details?: Array<{
+          reason?: string;
+        }>;
+      };
+    };
+
+    return {
+      message: data.error?.message ?? `Google API request failed: ${res.status}`,
+      reason: data.error?.details?.find((detail) => detail.reason)?.reason ?? null,
+    };
+  } catch {
+    return {
+      message: `Google API request failed: ${res.status}`,
+      reason: null,
+    };
+  }
+}
+
 function isPrivateHostname(hostname: string) {
   const normalized = hostname.toLowerCase();
 
@@ -561,14 +584,54 @@ async function searchYoutube(
   userId: string,
   supabase: SupabaseClient
 ): Promise<ToolResult> {
-  const cfg = await getUserConfig(supabase, userId, "youtube");
-  if (!cfg?.api_key) return notConnected("YouTube (Data API v3)");
-
   const query = String(args.query ?? "");
+  const youtubeSearchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+  const cfg = await getUserConfig(supabase, userId, "youtube");
+
+  if (!cfg?.api_key) {
+    return {
+      toolOutput: {
+        error: "YouTube (Data API v3) is not connected. I opened YouTube search results instead.",
+        fallback_url: youtubeSearchUrl,
+      },
+      clientAction: {
+        type: "open_url",
+        url: youtubeSearchUrl,
+        description: `Search YouTube for ${query}`,
+      },
+    };
+  }
+
   const res = await fetch(
-    `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=5&q=${encodeURIComponent(query)}&key=${cfg.api_key}`
+    `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=5&q=${encodeURIComponent(query)}`,
+    {
+      headers: {
+        Accept: "application/json",
+        "x-goog-api-key": cfg.api_key,
+      },
+    }
   );
-  if (!res.ok) return { toolOutput: { error: `YouTube search failed: ${res.status}` } };
+  if (!res.ok) {
+    const googleError = await readGoogleApiError(res);
+    const serviceBlocked =
+      res.status === 403 && googleError.reason === "API_KEY_SERVICE_BLOCKED";
+
+    return {
+      toolOutput: {
+        error: serviceBlocked
+          ? "Your YouTube API key is blocked from calling YouTube Data API v3. In Google Cloud Console, enable YouTube Data API v3 and allow it under this key's API restrictions."
+          : googleError.message,
+        status: res.status,
+        reason: googleError.reason,
+        fallback_url: youtubeSearchUrl,
+      },
+      clientAction: {
+        type: "open_url",
+        url: youtubeSearchUrl,
+        description: `Search YouTube for ${query}`,
+      },
+    };
+  }
 
   const data = (await res.json()) as {
     items?: Array<{

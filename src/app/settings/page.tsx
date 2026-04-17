@@ -95,10 +95,10 @@ const SERVICES: ServiceDef[] = [
     id: "youtube",
     label: "YouTube Data API",
     emoji: "▶️",
-    description: "Search YouTube videos and channels.",
+    description: "Search YouTube videos and channels. Enable YouTube Data API v3 and allow this key to call it.",
     section: "Media & Creation",
     fields: [{ key: "api_key", label: "API Key", placeholder: "AIzaSyxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }],
-    docsUrl: "https://console.cloud.google.com",
+    docsUrl: "https://developers.google.com/youtube/registering_an_application",
   },
   // Smart Home
   {

@@ -170,6 +170,8 @@ export function EveConsole() {
   const activeRecogActiveRef = useRef(false);
   const activeLastEventRef = useRef(0);
   const activeRestartCountRef = useRef(0);
+  const activeSessionIdRef = useRef(0);
+  const wakeSuppressedRef = useRef(false);
   const interimTranscriptRef = useRef("");
   const wakeWatchdogRef = useRef<number | null>(null);
   const listeningStartedAtRef = useRef(0);
@@ -279,21 +281,6 @@ export function EveConsole() {
           try { staleWakeRecog?.stop(); } catch { /* ignore */ }
           window.setTimeout(startWakeWordListener, 350);
         }
-      } else if (voiceStateRef.current === "listening") {
-        const timeSinceLast = now - activeLastEventRef.current;
-        const noRef = !activeRecogRef.current;
-        const stuckBeforeStart =
-          !!activeRecogRef.current &&
-          !activeRecogActiveRef.current &&
-          timeSinceLast > 3_500;
-        const stalledActive =
-          !!activeRecogRef.current &&
-          activeRecogActiveRef.current &&
-          timeSinceLast > Math.max(initialListenWindowRef.current, trailingSilenceWindowRef.current) + 4_000;
-
-        if (noRef || stuckBeforeStart || stalledActive) {
-          recoverToStandby(200);
-        }
       }
       // Otherwise listener is healthy — leave it alone
     }, 5000);
@@ -354,16 +341,8 @@ export function EveConsole() {
   // If nobody speaks within 3.5s, close the window and return to wake-word standby.
   function startPostReplyListen() {
     if (voiceStateRef.current !== "standby") return; // wake word off or already listening
+    wakeSuppressedRef.current = false;
     startActiveListening("", "followup");
-
-    postReplyTimerRef.current = window.setTimeout(() => {
-      postReplyTimerRef.current = null;
-      // Only close the window if the user still hasn't said anything
-      if (voiceStateRef.current === "listening" && !hasCapturedActiveSpeech()) {
-        // Delay so Chrome fully releases the mic before we try to reopen it
-        recoverToStandby();
-      }
-    }, 3500);
   }
 
   function finishPlayback(messageId: string, fullText: string) {
@@ -373,6 +352,7 @@ export function EveConsole() {
     setStatus("ready");
     setMood(inferMood(fullText));
     setLiveExcerpt(fullText);
+    wakeSuppressedRef.current = false;
     startPostReplyListen();
   }
 
@@ -497,7 +477,9 @@ export function EveConsole() {
   function recoverToStandby(delay = 350) {
     stopActiveListening();
     setVoiceSynced("standby");
-    window.setTimeout(startWakeWordListener, delay);
+    if (!wakeSuppressedRef.current) {
+      window.setTimeout(startWakeWordListener, delay);
+    }
   }
 
   function hasSpeechSignal(text: string) {
@@ -525,6 +507,7 @@ export function EveConsole() {
   }
 
   function stopActiveListening() {
+    activeSessionIdRef.current += 1;
     activeRecogRef.current?.stop();
     activeRecogRef.current = null;
     activeRecogActiveRef.current = false;
@@ -546,9 +529,9 @@ export function EveConsole() {
     const finalText = finalTranscriptRef.current.trim();
     const interimText = interimTranscriptRef.current.trim();
     const text = finalText || (hasUsableSpeech(interimText) ? interimText : "");
+    wakeSuppressedRef.current = true;
     stopActiveListening();
     setVoiceSynced("standby");
-    window.setTimeout(startWakeWordListener, 350); // delay so Chrome releases mic first
     if (text) {
       setPrompt("");
       void submitPrompt(text);
@@ -592,6 +575,7 @@ export function EveConsole() {
     const SR = getSR();
     if (!SR) return;
     const trimmedSeed = seedText.trim();
+    const sessionId = activeSessionIdRef.current + 1;
 
     // Chrome only allows one SpeechRecognition at a time — stop the wake word
     // listener before starting active recording to avoid immediate error/close.
@@ -599,16 +583,19 @@ export function EveConsole() {
     wakeRecogRef.current = null;
 
     stopActiveListening();
+    activeSessionIdRef.current = sessionId;
     setVoiceSynced("listening");
     finalTranscriptRef.current = trimmedSeed ? `${trimmedSeed} ` : "";
     lastSpeechRef.current = Date.now();
     activeLastEventRef.current = Date.now();
     listeningStartedAtRef.current = Date.now();
     heardSpeechSinceListenRef.current = hasSpeechSignal(trimmedSeed);
-    initialListenWindowRef.current = mode === "followup" ? 4500 : 8000;
+    initialListenWindowRef.current = mode === "followup" ? 3500 : 8000;
     trailingSilenceWindowRef.current = 3500;
     if (trimmedSeed) {
       setPrompt(trimmedSeed);
+    } else {
+      setPrompt("");
     }
     setInterimTranscript(trimmedSeed);
     interimTranscriptRef.current = trimmedSeed;
@@ -618,11 +605,33 @@ export function EveConsole() {
     rec.lang = "en-US";
     rec.continuous = true;
     rec.interimResults = true;
+    let startupTimeout: number | null =
+      typeof window !== "undefined"
+        ? window.setTimeout(() => {
+            if (
+              activeSessionIdRef.current !== sessionId ||
+              voiceStateRef.current !== "listening" ||
+              activeRecogRef.current !== rec
+            ) {
+              return;
+            }
+            recoverToStandby(200);
+          }, 2200)
+        : null;
+
+    function clearStartupTimeout() {
+      if (startupTimeout) {
+        window.clearTimeout(startupTimeout);
+        startupTimeout = null;
+      }
+    }
 
     // Reset the silence clock the moment the mic is actually live so the
     // user gets the full silence window — not a shortened one due to Chrome
     // taking time to initialise the new recognition instance.
     rec.onstart = () => {
+      if (activeSessionIdRef.current !== sessionId || activeRecogRef.current !== rec) return;
+      clearStartupTimeout();
       const now = Date.now();
       activeRecogActiveRef.current = true;
       activeLastEventRef.current = now;
@@ -633,15 +642,16 @@ export function EveConsole() {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rec.onresult = (e: any) => {
-      if (voiceStateRef.current !== "listening") return;
+      if (
+        activeSessionIdRef.current !== sessionId ||
+        activeRecogRef.current !== rec ||
+        voiceStateRef.current !== "listening"
+      ) {
+        return;
+      }
       activeLastEventRef.current = Date.now();
 
       // Speech detected — cancel the post-reply close timer so the window stays open
-      if (postReplyTimerRef.current) {
-        window.clearTimeout(postReplyTimerRef.current);
-        postReplyTimerRef.current = null;
-      }
-
       let interim = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const t = e.results[i][0].transcript;
@@ -666,6 +676,8 @@ export function EveConsole() {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rec.onerror = (e: any) => {
+      if (activeSessionIdRef.current !== sessionId || activeRecogRef.current !== rec) return;
+      clearStartupTimeout();
       activeRecogActiveRef.current = false;
       activeLastEventRef.current = Date.now();
       if (e.error === "aborted") return; // intentional .stop() — onend will handle restart
@@ -678,6 +690,8 @@ export function EveConsole() {
     // Restart with a small delay so Chrome has time to fully release the mic.
     // If restart throws, recover to standby so the system never gets stuck.
     rec.onend = () => {
+      if (activeSessionIdRef.current !== sessionId || activeRecogRef.current !== rec) return;
+      clearStartupTimeout();
       activeRecogActiveRef.current = false;
       activeLastEventRef.current = Date.now();
       if (voiceStateRef.current !== "listening") return;
@@ -701,7 +715,13 @@ export function EveConsole() {
       }
 
       window.setTimeout(() => {
-        if (voiceStateRef.current !== "listening" || activeRecogRef.current !== rec) return;
+        if (
+          activeSessionIdRef.current !== sessionId ||
+          voiceStateRef.current !== "listening" ||
+          activeRecogRef.current !== rec
+        ) {
+          return;
+        }
         try {
           activeLastEventRef.current = Date.now();
           rec.start();
@@ -723,7 +743,7 @@ export function EveConsole() {
 
   function startWakeWordListener() {
     const SR = getSR();
-    if (!SR || voiceStateRef.current === "off") return;
+    if (!SR || voiceStateRef.current === "off" || wakeSuppressedRef.current) return;
 
     wakeRecogRef.current?.stop();
     wakeRecogRef.current = null;
@@ -817,9 +837,11 @@ export function EveConsole() {
 
   function toggleVoiceStandby() {
     if (voiceStateRef.current === "off") {
+      wakeSuppressedRef.current = false;
       setVoiceSynced("standby");
       startWakeWordListener();
     } else {
+      wakeSuppressedRef.current = false;
       wakeRecogRef.current?.stop();
       wakeRecogRef.current = null;
       stopActiveListening();
@@ -830,12 +852,14 @@ export function EveConsole() {
   // Manual mic tap: skip wake word and go straight to active listening.
   function tapMic() {
     if (voiceStateRef.current === "listening") {
+      wakeSuppressedRef.current = false;
       stopActiveListening();
       // Stay in standby if wake word is on, otherwise off
       const next = voiceState === "off" ? "off" : "standby";
       setVoiceSynced(next);
       if (next === "standby") window.setTimeout(startWakeWordListener, 350);
     } else {
+      wakeSuppressedRef.current = false;
       wakeRecogRef.current?.stop();
       startActiveListening("", "manual");
     }
@@ -902,6 +926,9 @@ export function EveConsole() {
     }
 
     cancelPlayback();
+    wakeSuppressedRef.current = true;
+    wakeRecogRef.current?.stop();
+    wakeRecogRef.current = null;
     userScrolledRef.current = false;
     if (/\b(play|watch|youtube|spotify|video|song|music)\b/i.test(submittedPrompt)) {
       setActiveVideo(null);
@@ -965,6 +992,7 @@ export function EveConsole() {
       speakReply(assistantMessage.id, assistantMessage.content);
       void executeActions(data.actions ?? []);
     } catch (error) {
+      wakeSuppressedRef.current = false;
       const fallbackText =
         error instanceof Error
           ? error.message
@@ -985,6 +1013,7 @@ export function EveConsole() {
       setStatus("error");
       setMood("alert");
       setLiveExcerpt(fallbackText);
+      recoverToStandby();
     }
   }
 

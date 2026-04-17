@@ -106,6 +106,68 @@ function formatMediaSearchReply(
   return `Here are a few ${source} results for "${query}":\n${formatted}\n\nWhich one would you like?`;
 }
 
+function extractOpenTarget(input: string) {
+  const match = input.match(
+    /^(?:can you\s+|could you\s+|please\s+)?(?:open(?:\s+up)?|go to|launch|navigate to)\s+(.+?)\s*(?:for me|please)?[.!?]*$/i,
+  );
+  return match?.[1]?.trim() ?? "";
+}
+
+function buildOpenUrl(target: string) {
+  const cleaned = target.trim().replace(/^the\s+/i, "");
+  const normalized = cleaned.toLowerCase();
+
+  const directSites: Array<[string, string]> = [
+    ["youtube", "https://www.youtube.com/"],
+    ["google", "https://www.google.com/"],
+    ["gmail", "https://mail.google.com/"],
+    ["google calendar", "https://calendar.google.com/"],
+    ["calendar", "https://calendar.google.com/"],
+    ["spotify", "https://open.spotify.com/"],
+    ["amazon", "https://www.amazon.com/"],
+    ["netflix", "https://www.netflix.com/"],
+    ["x", "https://x.com/"],
+    ["twitter", "https://x.com/"],
+    ["facebook", "https://www.facebook.com/"],
+    ["instagram", "https://www.instagram.com/"],
+    ["tiktok", "https://www.tiktok.com/"],
+    ["reddit", "https://www.reddit.com/"],
+    ["github", "https://github.com/"],
+  ];
+
+  for (const [label, url] of directSites) {
+    if (normalized === label) {
+      return { url, description: `Open ${cleaned}` };
+    }
+  }
+
+  if (normalized.startsWith("youtube ")) {
+    const query = cleaned.slice("youtube".length).trim();
+    return {
+      url: `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`,
+      description: `Search YouTube for ${query}`,
+    };
+  }
+
+  if (normalized.startsWith("google ")) {
+    const query = cleaned.slice("google".length).trim();
+    return {
+      url: `https://www.google.com/search?q=${encodeURIComponent(query)}`,
+      description: `Search Google for ${query}`,
+    };
+  }
+
+  if (/^(?:https?:\/\/|www\.)/i.test(cleaned) || /^[a-z0-9-]+\.[a-z]{2,}(?:\/.*)?$/i.test(cleaned)) {
+    const url = /^https?:\/\//i.test(cleaned) ? cleaned : `https://${cleaned.replace(/^www\./i, "www.")}`;
+    return { url, description: `Open ${cleaned}` };
+  }
+
+  return {
+    url: `https://www.google.com/search?q=${encodeURIComponent(cleaned)}`,
+    description: `Search Google for ${cleaned}`,
+  };
+}
+
 export async function POST(request: NextRequest) {
   try {
     const forbidden = rejectCrossSiteRequest(request);
@@ -137,6 +199,25 @@ export async function POST(request: NextRequest) {
         { error: "Send a prompt for Eve to respond to." },
         400,
       );
+    }
+
+    const directOpenTarget = extractOpenTarget(latestUserMessage);
+    if (directOpenTarget) {
+      const { url, description } = buildOpenUrl(directOpenTarget);
+      const { clientAction, toolOutput } = await executeTool(
+        "open_url",
+        { url, description },
+        userId,
+        supabase,
+      );
+
+      return jsonNoStore({
+        mode: "live",
+        reply: `Opening ${directOpenTarget}.`,
+        actions: clientAction ? [clientAction] : [],
+        state: normalizeConversationState(body.state),
+        toolOutput,
+      });
     }
 
     const activeConversationState = shouldResetPendingMediaSelection(

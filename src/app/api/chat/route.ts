@@ -2,6 +2,12 @@ import { GoogleGenAI, Content, Part } from "@google/genai";
 import { NextRequest } from "next/server";
 
 import { jsonNoStore, rejectCrossSiteRequest } from "@/lib/api-security";
+import {
+  buildConversationContextInstruction,
+  deriveConversationState,
+  normalizeConversationState,
+  type ToolExecutionEvent,
+} from "@/lib/conversation-state";
 import { eveSystemPrompt } from "@/lib/eve-system-prompt";
 import { ClientAction, EVE_FUNCTION_DECLARATIONS } from "@/lib/eve-tools";
 import { executeTool } from "@/lib/tool-executor";
@@ -69,13 +75,14 @@ export async function POST(request: NextRequest) {
     const { data: { user } } = await supabase.auth.getUser();
     const userId = user?.id ?? "anonymous";
 
-    let body: { messages?: unknown };
+    let body: { messages?: unknown; state?: unknown };
     try {
-      body = (await request.json()) as { messages?: unknown };
+      body = (await request.json()) as { messages?: unknown; state?: unknown };
     } catch {
       return jsonNoStore({ error: "Invalid JSON body." }, 400);
     }
     const messages = sanitizeMessages(body.messages);
+    const conversationState = normalizeConversationState(body.state);
     const latestUserMessage =
       [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
 
@@ -101,11 +108,21 @@ export async function POST(request: NextRequest) {
         mode: "offline",
         reply: buildOfflineReply(latestUserMessage),
         actions: [],
+        state: conversationState,
       });
     }
 
+    const turnContextInstruction = buildConversationContextInstruction(
+      conversationState,
+      latestUserMessage,
+    );
+    const activeSystemInstruction = turnContextInstruction
+      ? `${eveSystemPrompt}\n\n${turnContextInstruction}`
+      : eveSystemPrompt;
+
     const contents: Content[] = buildContents(messages);
     const actions: ClientAction[] = [];
+    const toolEvents: ToolExecutionEvent[] = [];
     let reply = "";
     let lastToolsUsed: string[] = [];
 
@@ -114,7 +131,7 @@ export async function POST(request: NextRequest) {
         model: "gemini-2.5-flash",
         contents,
         config: {
-          systemInstruction: eveSystemPrompt,
+          systemInstruction: activeSystemInstruction,
           temperature: 0.9,
           topP: 0.95,
           maxOutputTokens: 1024,
@@ -156,6 +173,12 @@ export async function POST(request: NextRequest) {
         );
 
         if (clientAction) actions.push(clientAction);
+        toolEvents.push({
+          name: fc.name ?? "",
+          args: (fc.args as Record<string, unknown>) ?? {},
+          toolOutput,
+          clientAction,
+        });
 
         responseParts.push({
           functionResponse: { name: fc.name, id: fc.id, response: toolOutput },
@@ -171,7 +194,7 @@ export async function POST(request: NextRequest) {
           model: "gemini-2.5-flash",
           contents,
           config: {
-            systemInstruction: eveSystemPrompt +
+            systemInstruction: activeSystemInstruction +
               "\n\nIMPORTANT: You must now respond with a short spoken confirmation of what you just did. Do not call any tools.",
             temperature: 0.7,
             maxOutputTokens: 200,
@@ -190,7 +213,17 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return jsonNoStore({ mode: "live", reply, actions });
+    const nextConversationState = deriveConversationState(
+      conversationState,
+      toolEvents,
+    );
+
+    return jsonNoStore({
+      mode: "live",
+      reply,
+      actions,
+      state: nextConversationState,
+    });
   } catch (error) {
     console.error("chat-route-error", error);
     return jsonNoStore(

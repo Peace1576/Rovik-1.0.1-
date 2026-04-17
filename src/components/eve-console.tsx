@@ -11,6 +11,7 @@ import {
 import Link from "next/link";
 
 import { EveAvatar } from "@/components/eve-avatar";
+import type { ConversationState } from "@/lib/conversation-state";
 import type { ClientAction } from "@/lib/eve-tools";
 import { createClient } from "@/lib/supabase/client";
 
@@ -148,6 +149,9 @@ export function EveConsole() {
   const [modelMode, setModelMode] = useState<ModelMode>("live");
   const [liveExcerpt, setLiveExcerpt] = useState(introMessage);
   const [recentActions, setRecentActions] = useState<ClientAction[]>([]);
+  const [conversationState, setConversationState] = useState<ConversationState>({
+    pendingMediaSelection: null,
+  });
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [generatedImage, setGeneratedImage] = useState<{ url: string; prompt: string } | null>(null);
   const [activeVideo, setActiveVideo] = useState<ActiveVideo | null>(null);
@@ -701,7 +705,7 @@ export function EveConsole() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ messages: conversation }),
+        body: JSON.stringify({ messages: conversation, state: conversationState }),
       });
 
       const data = (await response.json()) as {
@@ -709,6 +713,7 @@ export function EveConsole() {
         mode?: ModelMode;
         reply?: string;
         actions?: ClientAction[];
+        state?: ConversationState;
       };
 
       if (!response.ok || !data.reply) {
@@ -727,6 +732,7 @@ export function EveConsole() {
       });
 
       setModelMode(data.mode ?? "live");
+      setConversationState(data.state ?? { pendingMediaSelection: null });
       speakReply(assistantMessage.id, assistantMessage.content);
       void executeActions(data.actions ?? []);
     } catch (error) {

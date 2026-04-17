@@ -25,5 +25,21 @@
     "eslint-config-next": "16.2.3",
     "tailwindcss": "^4",
     "typescript": "^5"
-  }
+  },
+  "description": "Eve is a browser-based prototype for Rovik's home operations assistant. It pairs a centered robot head UI with a speech-synced face, Gemini-backed responses, and a responsive chat surface built for Vercel deployment.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Peace1576/Rovik-1.0.1-.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Peace1576/Rovik-1.0.1-/issues"
+  },
+  "homepage": "https://github.com/Peace1576/Rovik-1.0.1-#readme"
 }

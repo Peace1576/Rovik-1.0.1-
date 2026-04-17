@@ -112,6 +112,34 @@ function selectVoice(voices: SpeechSynthesisVoice[]) {
   return englishVoices[0];
 }
 
+// ── Activation chime ──────────────────────────────────────────────────────
+// Two rising tones played via Web Audio API when the mic switches to LISTENING.
+function playChime() {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const AC = (window as any).AudioContext ?? (window as any).webkitAudioContext;
+    if (!AC) return;
+    const ctx = new AC() as AudioContext;
+    const now = ctx.currentTime;
+    // A5 (880 Hz) → E6 (1320 Hz), each note 380 ms with soft attack & exponential fade
+    [880, 1320].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      const t0 = now + i * 0.09;
+      gain.gain.setValueAtTime(0, t0);
+      gain.gain.linearRampToValueAtTime(0.28, t0 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.38);
+      osc.start(t0);
+      osc.stop(t0 + 0.38);
+    });
+    window.setTimeout(() => { try { ctx.close(); } catch { /* ignore */ } }, 700);
+  } catch { /* AudioContext unavailable — skip chime */ }
+}
+
 function MicIcon({ active }: { active: boolean }) {
   return (
     <svg
@@ -155,6 +183,8 @@ export function EveConsole() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [generatedImage, setGeneratedImage] = useState<{ url: string; prompt: string } | null>(null);
   const [activeVideo, setActiveVideo] = useState<ActiveVideo | null>(null);
+  // When Chrome blocks window.open (async context), store url here so user can tap it
+  const [pendingUrl, setPendingUrl] = useState<{ url: string; label: string } | null>(null);
   // Voice mode: off | standby (wake-word listener) | listening (active recording)
   const [voiceState, setVoiceState] = useState<"off" | "standby" | "listening">("standby");
   const [interimTranscript, setInterimTranscript] = useState("");
@@ -309,7 +339,14 @@ export function EveConsole() {
   // User speaks → full active listen. Silence → wake word back on.
   function startPostReplyListen() {
     if (voiceStateRef.current !== "standby") return;
-    startListening("", 3000); // 3s initial window, no seed
+    // 350 ms gap lets Chrome's audio engine fully release after TTS ends.
+    // Store handle in postReplyTimerRef so stopListening() can cancel it
+    // if something else (manual tap, new wake word, etc.) fires first.
+    postReplyTimerRef.current = window.setTimeout(() => {
+      postReplyTimerRef.current = null;
+      if (voiceStateRef.current !== "standby") return;
+      startListening("", 3500); // 3.5 s initial window after Eve's reply
+    }, 350);
   }
 
   function finishPlayback(messageId: string, fullText: string) {
@@ -486,7 +523,9 @@ export function EveConsole() {
   }
 
   function doSubmit() {
-    const text = (finalTextRef.current + " " + interimTranscriptRef.current).trim();
+    // interimTranscriptRef is always finalText + currentInterim — use it directly.
+    // Do NOT concat finalTextRef again or the text is doubled ("open YouTube  open YouTube").
+    const text = interimTranscriptRef.current.trim();
     stopListening();
     setVoiceSynced("standby");
     // Don't start wake word yet — finishPlayback will call startPostReplyListen
@@ -514,6 +553,15 @@ export function EveConsole() {
     hadSpeechRef.current = isWord(seed);
     setInterimTranscript(seed);
     setPrompt(seed);
+
+    // ── CRITICAL: seed the timestamps NOW so the interval's first tick
+    // doesn't see listenStartRef=0 / lastSpeechRef=0 (which are unix-epoch-0,
+    // ~1.7 trillion ms ago) and immediately compute p=1 → goIdle/doSubmit.
+    // Chrome fires rec.onstart ~100–500ms after rec.start(); these defaults
+    // hold the fort until then, and onstart refines them to the actual mic-open time.
+    const seedTime = Date.now();
+    listenStartRef.current = seedTime;
+    lastSpeechRef.current = seedTime;
 
     // ── Silence detection (interval, 200ms ticks) ──────────────────────────
     // Phase 1 — waiting for first word: abandon after initialWindowMs
@@ -547,6 +595,7 @@ export function EveConsole() {
       const now = Date.now();
       lastSpeechRef.current = now;  // reset clock from when mic is truly live
       listenStartRef.current = now;
+      playChime(); // 🔔 ring when mic goes live
     };
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -606,6 +655,7 @@ export function EveConsole() {
     rec.lang = "en-US";
     rec.continuous = true;
     rec.interimResults = true;
+    rec.maxAlternatives = 3; // check top-3 transcripts — helps when Chrome mis-hears first pass
     let done = false;         // triggered wake word this session
     let restarted = false;    // onerror already scheduled restart
 
@@ -619,15 +669,25 @@ export function EveConsole() {
       if (done || voiceStateRef.current !== "standby") return;
       wakeLastEventRef.current = Date.now();
       for (let i = e.resultIndex; i < e.results.length; i++) {
-        const t = e.results[i][0].transcript;
-        const m = t.match(/(?:hey\s*)?eve[,.\s]*(.*)/i);
-        if (m) {
-          done = true;
-          const seed = m[1]?.trim() ?? "";
-          wakeRecRef.current = null; // clear before stop so onend skips self-restart
-          try { rec.stop(); } catch { /* ignore */ }
-          startListening(seed, 7000);
-          return;
+        // Loop every alternative Chrome returned, not just [0]
+        const numAlts = e.results[i].length;
+        for (let j = 0; j < numAlts; j++) {
+          const t: string = e.results[i][j].transcript;
+          // Primary:  "Eve [rest]" / "Hey Eve [rest]"
+          // Fallback: standalone word "eve" anywhere in the transcript
+          const m =
+            t.match(/(?:hey\s*)?eve[,.\s]*(.*)/i) ??
+            (t.match(/\beve\b/i) ? [t, ""] : null);
+          if (m) {
+            done = true;
+            const seed = (m[1] ?? "").trim();
+            wakeRecRef.current = null; // clear before stop so onend skips self-restart
+            try { rec.stop(); } catch { /* ignore */ }
+            // If Eve is mid-speech, cut it off immediately (interrupt feature)
+            cancelPlayback();
+            startListening(seed, 7000);
+            return;
+          }
         }
       }
     };
@@ -647,11 +707,12 @@ export function EveConsole() {
     rec.onend = () => {
       wakeActiveRef.current = false;
       wakeLastEventRef.current = Date.now();
-      // Only self-restart if nothing else already did
+      // Only self-restart if nothing else already did.
+      // 200 ms gives Chrome time to fully release the mic before the next start().
       if (voiceStateRef.current === "standby" && !done && !restarted && wakeRecRef.current === rec) {
         wakeRecRef.current = null;
         restarted = true;
-        window.setTimeout(startWakeWordListener, 80);
+        window.setTimeout(startWakeWordListener, 200);
       }
     };
 
@@ -701,10 +762,8 @@ export function EveConsole() {
         });
       }
       if (action.type === "open_url" && action.url) {
-        const popup = window.open(action.url, "_blank", "noopener,noreferrer");
-        if (!popup) {
-          window.location.assign(action.url);
-        }
+        window.location.assign(action.url);
+        return;
       }
       if (action.type === "set_reminder") {
         const delayMs = action.delay_minutes * 60_000;
@@ -1135,6 +1194,30 @@ export function EveConsole() {
                   Risky actions (send email, event invites, purchases, cancels, door unlocks) always ask before running.
                 </p>
               </section>
+
+              {/* Popup-blocked link — shown when window.open returns null in async context */}
+              {pendingUrl && (
+                <div className="glass-panel rounded-[2rem] px-5 py-4 flex items-center justify-between gap-4">
+                  <div>
+                    <p className="font-mono text-[0.65rem] uppercase tracking-[0.2em] text-[#5c718d]">Tap to open (popup was blocked)</p>
+                    <p className="mt-1 text-sm font-semibold text-[#09101d] truncate max-w-[16rem]">{pendingUrl.label}</p>
+                  </div>
+                  <div className="flex items-center gap-3 text-xs font-medium shrink-0">
+                    <a
+                      href={pendingUrl.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={() => setPendingUrl(null)}
+                      className="rounded-full bg-[linear-gradient(135deg,#0b74ff,#30c2ff)] px-4 py-2 text-white shadow-sm hover:opacity-90"
+                    >
+                      Open
+                    </a>
+                    <button onClick={() => setPendingUrl(null)} className="text-[#5c718d] hover:text-[#09101d]">
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {generatedImage && (
                 <div className="glass-panel rounded-[2rem] overflow-hidden">

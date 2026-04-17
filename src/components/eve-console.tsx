@@ -167,6 +167,9 @@ export function EveConsole() {
   const activeRecogRef = useRef<any>(null);
   const wakeRecogActiveRef = useRef(false);
   const wakeLastEventRef = useRef(0);
+  const activeRecogActiveRef = useRef(false);
+  const activeLastEventRef = useRef(0);
+  const activeRestartCountRef = useRef(0);
   const interimTranscriptRef = useRef("");
   const wakeWatchdogRef = useRef<number | null>(null);
   const listeningStartedAtRef = useRef(0);
@@ -243,38 +246,54 @@ export function EveConsole() {
     document.addEventListener("visibilitychange", onVisibilityChange);
 
     wakeWatchdogRef.current = window.setInterval(() => {
-      if (voiceStateRef.current !== "standby") return;
-
       const now = Date.now();
-      const timeSinceLast = now - wakeLastEventRef.current;
+      if (voiceStateRef.current === "standby") {
+        const timeSinceLast = now - wakeLastEventRef.current;
 
-      // Case 1: no ref at all — listener was never started or got cleared
-      const noRef = !wakeRecogRef.current;
+        // Case 1: no ref at all — listener was never started or got cleared
+        const noRef = !wakeRecogRef.current;
 
-      // Case 2: ref exists but onstart never fired after 8s — stuck before start
-      const stuckBeforeStart =
-        !!wakeRecogRef.current &&
-        !wakeRecogActiveRef.current &&
-        timeSinceLast > 8_000;
+        // Case 2: ref exists but onstart never fired after 8s — stuck before start
+        const stuckBeforeStart =
+          !!wakeRecogRef.current &&
+          !wakeRecogActiveRef.current &&
+          timeSinceLast > 8_000;
 
-      // Case 3: listener was running (onstart fired) but Chrome killed it
-      // without firing onend — no events at all for >50s
-      const silentlyDead =
-        !!wakeRecogRef.current &&
-        wakeRecogActiveRef.current &&
-        timeSinceLast > 50_000;
+        // Case 3: listener was running (onstart fired) but Chrome killed it
+        // without firing onend — no events at all for >50s
+        const silentlyDead =
+          !!wakeRecogRef.current &&
+          wakeRecogActiveRef.current &&
+          timeSinceLast > 50_000;
 
-      if (noRef) {
-        // Nothing running — start fresh
-        startWakeWordListener();
-      } else if (stuckBeforeStart || silentlyDead) {
-        // Listener is stuck or silently dead — force-restart.
-        // Null refs BEFORE stopping so that when onend fires it sees
-        // wakeRecogRef.current === null and skips its own restart.
-        wakeRecogRef.current = null;
-        wakeRecogActiveRef.current = false;
-        try { wakeRecogRef.current?.stop(); } catch { /* ignore */ }
-        window.setTimeout(startWakeWordListener, 350);
+        if (noRef) {
+          // Nothing running — start fresh
+          startWakeWordListener();
+        } else if (stuckBeforeStart || silentlyDead) {
+          // Listener is stuck or silently dead — force-restart.
+          // Null refs BEFORE stopping so that when onend fires it sees
+          // wakeRecogRef.current === null and skips its own restart.
+          const staleWakeRecog = wakeRecogRef.current;
+          wakeRecogRef.current = null;
+          wakeRecogActiveRef.current = false;
+          try { staleWakeRecog?.stop(); } catch { /* ignore */ }
+          window.setTimeout(startWakeWordListener, 350);
+        }
+      } else if (voiceStateRef.current === "listening") {
+        const timeSinceLast = now - activeLastEventRef.current;
+        const noRef = !activeRecogRef.current;
+        const stuckBeforeStart =
+          !!activeRecogRef.current &&
+          !activeRecogActiveRef.current &&
+          timeSinceLast > 3_500;
+        const stalledActive =
+          !!activeRecogRef.current &&
+          activeRecogActiveRef.current &&
+          timeSinceLast > Math.max(initialListenWindowRef.current, trailingSilenceWindowRef.current) + 4_000;
+
+        if (noRef || stuckBeforeStart || stalledActive) {
+          recoverToStandby(200);
+        }
       }
       // Otherwise listener is healthy — leave it alone
     }, 5000);
@@ -341,10 +360,8 @@ export function EveConsole() {
       postReplyTimerRef.current = null;
       // Only close the window if the user still hasn't said anything
       if (voiceStateRef.current === "listening" && !hasCapturedActiveSpeech()) {
-        stopActiveListening();
-        setVoiceSynced("standby");
         // Delay so Chrome fully releases the mic before we try to reopen it
-        window.setTimeout(startWakeWordListener, 350);
+        recoverToStandby();
       }
     }, 3500);
   }
@@ -477,6 +494,12 @@ export function EveConsole() {
     setVoiceState(state);
   }
 
+  function recoverToStandby(delay = 350) {
+    stopActiveListening();
+    setVoiceSynced("standby");
+    window.setTimeout(startWakeWordListener, delay);
+  }
+
   function hasSpeechSignal(text: string) {
     return text.replace(/[^a-z0-9]/gi, "").length >= 2;
   }
@@ -504,6 +527,9 @@ export function EveConsole() {
   function stopActiveListening() {
     activeRecogRef.current?.stop();
     activeRecogRef.current = null;
+    activeRecogActiveRef.current = false;
+    activeLastEventRef.current = 0;
+    activeRestartCountRef.current = 0;
     stopSilenceRaf();
     setInterimTranscript("");
     interimTranscriptRef.current = "";
@@ -550,9 +576,7 @@ export function EveConsole() {
         if (hasFinalText || hasUsableInterim) {
           autoSubmit();
         } else {
-          stopActiveListening();
-          setVoiceSynced("standby");
-          window.setTimeout(startWakeWordListener, 350);
+          recoverToStandby();
         }
         return;
       }
@@ -578,10 +602,14 @@ export function EveConsole() {
     setVoiceSynced("listening");
     finalTranscriptRef.current = trimmedSeed ? `${trimmedSeed} ` : "";
     lastSpeechRef.current = Date.now();
+    activeLastEventRef.current = Date.now();
     listeningStartedAtRef.current = Date.now();
     heardSpeechSinceListenRef.current = hasSpeechSignal(trimmedSeed);
     initialListenWindowRef.current = mode === "followup" ? 4500 : 8000;
     trailingSilenceWindowRef.current = 3500;
+    if (trimmedSeed) {
+      setPrompt(trimmedSeed);
+    }
     setInterimTranscript(trimmedSeed);
     interimTranscriptRef.current = trimmedSeed;
 
@@ -596,6 +624,8 @@ export function EveConsole() {
     // taking time to initialise the new recognition instance.
     rec.onstart = () => {
       const now = Date.now();
+      activeRecogActiveRef.current = true;
+      activeLastEventRef.current = now;
       lastSpeechRef.current = now;
       listeningStartedAtRef.current = now;
       startSilenceDetection();
@@ -604,6 +634,7 @@ export function EveConsole() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rec.onresult = (e: any) => {
       if (voiceStateRef.current !== "listening") return;
+      activeLastEventRef.current = Date.now();
 
       // Speech detected — cancel the post-reply close timer so the window stays open
       if (postReplyTimerRef.current) {
@@ -630,38 +661,64 @@ export function EveConsole() {
       const nextTranscript = finalTranscriptRef.current + interim;
       interimTranscriptRef.current = nextTranscript;
       setInterimTranscript(nextTranscript);
+      setPrompt(nextTranscript.trim());
     };
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rec.onerror = (e: any) => {
+      activeRecogActiveRef.current = false;
+      activeLastEventRef.current = Date.now();
       if (e.error === "aborted") return; // intentional .stop() — onend will handle restart
-      if (e.error === "no-speech") return; // Chrome fired silence timeout — onend restarts
+      if (e.error === "no-speech") return; // Chrome fired silence timeout — onend will decide whether to retry
       // Any real error: fall back to standby so wake word keeps working
-      stopActiveListening();
-      setVoiceSynced("standby");
-      window.setTimeout(startWakeWordListener, 350);
+      recoverToStandby();
     };
 
     // Chrome stops continuous recognition after ~60s (or on internal errors).
     // Restart with a small delay so Chrome has time to fully release the mic.
     // If restart throws, recover to standby so the system never gets stuck.
     rec.onend = () => {
+      activeRecogActiveRef.current = false;
+      activeLastEventRef.current = Date.now();
       if (voiceStateRef.current !== "listening") return;
+      const finalText = finalTranscriptRef.current.trim();
+      const interimText = interimTranscriptRef.current.trim();
+      if (finalText || hasUsableSpeech(interimText)) {
+        autoSubmit();
+        return;
+      }
+
+      const withinInitialWindow =
+        !hasCapturedActiveSpeech() &&
+        Date.now() - listeningStartedAtRef.current < initialListenWindowRef.current &&
+        activeRestartCountRef.current < 2;
+
+      if (withinInitialWindow) {
+        activeRestartCountRef.current += 1;
+      } else {
+        recoverToStandby();
+        return;
+      }
+
       window.setTimeout(() => {
-        if (voiceStateRef.current !== "listening") return;
+        if (voiceStateRef.current !== "listening" || activeRecogRef.current !== rec) return;
         try {
+          activeLastEventRef.current = Date.now();
           rec.start();
         } catch {
           // Restart failed — reset cleanly so wake word still works
-          stopActiveListening();
-          setVoiceSynced("standby");
-          window.setTimeout(startWakeWordListener, 350);
+          recoverToStandby();
         }
       }, 150);
     };
 
-    rec.start();
     activeRecogRef.current = rec;
+    try {
+      rec.start();
+    } catch {
+      recoverToStandby();
+      return;
+    }
   }
 
   function startWakeWordListener() {

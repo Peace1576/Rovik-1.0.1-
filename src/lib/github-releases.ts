@@ -29,6 +29,10 @@ export type LatestDesktopRelease = {
   version: string | null;
 };
 
+type LatestDesktopReleaseOptions = {
+  fresh?: boolean;
+};
+
 function getGitHubReleasesToken() {
   return (
     process.env.GITHUB_RELEASES_TOKEN ||
@@ -75,11 +79,13 @@ function getWindowsDesktopAssetRank(assetName: string) {
   return 0;
 }
 
-export async function getLatestDesktopRelease(): Promise<LatestDesktopRelease | null> {
+export async function getLatestDesktopRelease(
+  options?: LatestDesktopReleaseOptions,
+): Promise<LatestDesktopRelease | null> {
   try {
     const response = await fetch(LATEST_RELEASE_API_URL, {
       headers: getGitHubHeaders(),
-      next: { revalidate: 3600 },
+      ...(options?.fresh ? { cache: "no-store" as const } : { next: { revalidate: 300 } }),
     });
 
     if (!response.ok) {
@@ -118,7 +124,7 @@ export async function getLatestDesktopRelease(): Promise<LatestDesktopRelease | 
 }
 
 export async function getLatestDesktopReleaseDownloadUrl(): Promise<string | null> {
-  const latestRelease = await getLatestDesktopRelease();
+  const latestRelease = await getLatestDesktopRelease({ fresh: true });
   if (!latestRelease) return null;
 
   const token = getGitHubReleasesToken();

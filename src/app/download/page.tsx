@@ -125,11 +125,14 @@ export default async function DownloadPage() {
                 Release status
               </p>
               <h3 className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-[#09101d]">
-                The Windows shell is ready. Distribution link is the last mile.
+                The Windows installer is the supported desktop download.
               </h3>
               <p className="mt-2 text-sm leading-7 text-[#566780]">
-                Desktop builds are published through GitHub Releases as a Windows zip
-                archive. Download it, extract it, and run `Rovik.exe`.
+                Desktop builds are published through GitHub Releases as a Windows
+                installer. Download `Rovik Setup`, run the installer, and then
+                launch Rovik from the desktop shortcut or Start menu. Because the
+                app is not code-signed yet, Windows SmartScreen may ask you to
+                click `More info` and then `Run anyway`.
               </p>
             </div>
 

@@ -33,18 +33,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build Windows desktop package
-        run: npm run desktop:pack
+      - name: Build Windows desktop installer
+        run: npm run desktop:dist
 
-      - name: Archive packaged app
+      - name: Resolve installer asset
         shell: pwsh
         run: |
-          $archive = "dist-electron/Rovik-win32-x64.zip"
-          if (Test-Path $archive) {
-            Remove-Item $archive -Force
+          $installer = Get-ChildItem "dist-electron" -Filter "Rovik-Setup-*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $installer) {
+            throw "Windows installer not found in dist-electron."
           }
-          Compress-Archive -Path "dist-electron/Rovik-win32-x64/*" -DestinationPath $archive
-          "ASSET_PATH=$archive" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "ASSET_PATH=$($installer.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Resolve release tag
         shell: pwsh

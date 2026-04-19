@@ -47,13 +47,32 @@ function getGitHubHeaders(accept = "application/vnd.github+json") {
   };
 }
 
-function isWindowsDesktopAsset(assetName: string) {
+function getWindowsDesktopAssetRank(assetName: string) {
   const normalized = assetName.toLowerCase();
-  return (
+  if (
+    normalized.endsWith(".exe") &&
+    normalized.includes("rovik") &&
+    normalized.includes("setup")
+  ) {
+    return 3;
+  }
+
+  if (
+    normalized.endsWith(".msi") &&
+    normalized.includes("rovik")
+  ) {
+    return 2;
+  }
+
+  if (
     normalized.endsWith(".zip") &&
     normalized.includes("rovik") &&
     normalized.includes("win32-x64")
-  );
+  ) {
+    return 1;
+  }
+
+  return 0;
 }
 
 export async function getLatestDesktopRelease(): Promise<LatestDesktopRelease | null> {
@@ -69,12 +88,21 @@ export async function getLatestDesktopRelease(): Promise<LatestDesktopRelease | 
 
     const release = (await response.json()) as GitHubLatestRelease;
     const asset =
-      release.assets?.find(
-        (entry) =>
-          entry.name &&
-          entry.browser_download_url &&
-          isWindowsDesktopAsset(entry.name),
-      ) ?? null;
+      release.assets
+        ?.filter(
+          (entry) =>
+            entry.name &&
+            entry.browser_download_url &&
+            getWindowsDesktopAssetRank(entry.name) > 0,
+        )
+        .sort((left, right) => {
+          const leftName = left.name ?? "";
+          const rightName = right.name ?? "";
+          return (
+            getWindowsDesktopAssetRank(rightName) -
+            getWindowsDesktopAssetRank(leftName)
+          );
+        })[0] ?? null;
 
     return {
       assetApiUrl: asset?.url ?? null,

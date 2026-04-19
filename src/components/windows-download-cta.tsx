@@ -18,7 +18,7 @@ export function WindowsDownloadCta({
   const [accepted, setAccepted] = useState(false);
 
   const buttonText = useMemo(() => {
-    if (hasHostedDownload) return "Download for Windows";
+    if (hasHostedDownload) return "Download Windows installer";
     return "View GitHub releases";
   }, [hasHostedDownload]);
 

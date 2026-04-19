@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { WindowsDownloadCta } from "@/components/windows-download-cta";
 import {
   desktopCapabilityCards,
   desktopExamplePrompts,
@@ -41,25 +42,9 @@ export default async function DownloadPage() {
             >
               Back to Eve
             </Link>
-            {hasHostedDownload ? (
-              <a
-                href={desktopDownloadUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="rounded-full bg-[linear-gradient(135deg,#0b74ff_0%,#30c2ff_100%)] px-5 py-2 text-sm font-semibold text-white shadow-[0_18px_40px_rgba(19,112,255,0.28)] transition hover:-translate-y-0.5"
-              >
-                Download for Windows
-              </a>
-            ) : (
-              <a
-                href={releasesPageUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="rounded-full border border-[#0b74ff]/20 bg-[rgba(11,116,255,0.08)] px-4 py-2 text-sm font-medium text-[#0b74ff] transition hover:bg-[rgba(11,116,255,0.15)]"
-              >
-                View GitHub releases
-              </a>
-            )}
+            <span className="rounded-full border border-[#0b74ff]/20 bg-[rgba(11,116,255,0.08)] px-4 py-2 text-sm font-medium text-[#0b74ff]">
+              Legal acknowledgment required
+            </span>
           </div>
         </header>
 
@@ -170,6 +155,26 @@ export default async function DownloadPage() {
                 Try Eve
               </Link>
             </div>
+          </div>
+        </section>
+
+        <section className="glass-panel rounded-[2rem] px-5 py-5 sm:px-6">
+          <p className="font-mono text-[0.68rem] uppercase tracking-[0.3em] text-[#63758e]">
+            Download acknowledgment
+          </p>
+          <h3 className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-[#09101d]">
+            Users must accept the legal documents before downloading.
+          </h3>
+          <p className="mt-2 max-w-2xl text-sm leading-7 text-[#566780]">
+            This download gate links the core legal documents and requires a clear
+            acknowledgment before the Windows package can be opened from this page.
+          </p>
+          <div className="mt-5">
+            <WindowsDownloadCta
+              downloadUrl={desktopDownloadUrl}
+              hasHostedDownload={hasHostedDownload}
+              releasesPageUrl={releasesPageUrl}
+            />
           </div>
         </section>
       </div>

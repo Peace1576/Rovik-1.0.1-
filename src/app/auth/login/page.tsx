@@ -3,6 +3,8 @@
 import { Suspense, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+
+import { LegalLinks } from "@/components/legal-links";
 import { createClient } from "@/lib/supabase/client";
 
 function LoginForm() {
@@ -84,6 +86,9 @@ function LoginForm() {
           Create one
         </Link>
       </p>
+      <div className="mt-5 border-t border-white/45 pt-4">
+        <LegalLinks compact showHub className="justify-center" />
+      </div>
     </div>
   );
 }

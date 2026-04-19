@@ -2,6 +2,9 @@
 
 import { useState } from "react";
 import Link from "next/link";
+
+import { LegalLinks } from "@/components/legal-links";
+import { LEGAL_VERSION } from "@/lib/legal";
 import { createClient } from "@/lib/supabase/client";
 
 export default function SignupPage() {
@@ -12,6 +15,8 @@ export default function SignupPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
+  const [acceptedLegal, setAcceptedLegal] = useState(false);
+  const [acceptedAiRisk, setAcceptedAiRisk] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -25,14 +30,32 @@ export default function SignupPage() {
       setError("Password must be at least 8 characters.");
       return;
     }
+    if (!acceptedLegal) {
+      setError("You must agree to the legal terms before creating an account.");
+      return;
+    }
+    if (!acceptedAiRisk) {
+      setError("You must acknowledge your responsibility for reviewing Rovik's outputs and actions.");
+      return;
+    }
 
     setLoading(true);
     const supabase = createClient();
+    const acceptedAt = new Date().toISOString();
     const { error } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        data: { display_name: displayName },
+        data: {
+          display_name: displayName,
+          legal_version: LEGAL_VERSION,
+          legal_accepted_at: acceptedAt,
+          terms_accepted_at: acceptedAt,
+          privacy_accepted_at: acceptedAt,
+          acceptable_use_accepted_at: acceptedAt,
+          eula_accepted_at: acceptedAt,
+          ai_risk_acknowledged_at: acceptedAt,
+        },
         emailRedirectTo: `${window.location.origin}/auth/callback`,
       },
     });
@@ -136,9 +159,55 @@ export default function SignupPage() {
               </p>
             )}
 
+            <label className="flex items-start gap-3 rounded-[1.2rem] border border-white/60 bg-white/74 px-4 py-3 text-sm leading-6 text-[#22344d]">
+              <input
+                type="checkbox"
+                checked={acceptedLegal}
+                onChange={(e) => setAcceptedLegal(e.target.checked)}
+                required
+                className="mt-1 h-4 w-4 rounded border-[#90a4bd] text-[#0b74ff] focus:ring-[#72ceff]"
+              />
+              <span>
+                I agree to Rovik&apos;s{" "}
+                <Link href="/legal/terms" className="text-[#0b74ff] hover:underline">
+                  Terms of Use
+                </Link>
+                ,{" "}
+                <Link href="/legal/privacy" className="text-[#0b74ff] hover:underline">
+                  Privacy Policy
+                </Link>
+                ,{" "}
+                <Link
+                  href="/legal/acceptable-use"
+                  className="text-[#0b74ff] hover:underline"
+                >
+                  Acceptable Use Policy
+                </Link>
+                , and{" "}
+                <Link href="/legal/eula" className="text-[#0b74ff] hover:underline">
+                  Desktop App EULA
+                </Link>
+                .
+              </span>
+            </label>
+
+            <label className="flex items-start gap-3 rounded-[1.2rem] border border-white/60 bg-white/74 px-4 py-3 text-sm leading-6 text-[#22344d]">
+              <input
+                type="checkbox"
+                checked={acceptedAiRisk}
+                onChange={(e) => setAcceptedAiRisk(e.target.checked)}
+                required
+                className="mt-1 h-4 w-4 rounded border-[#90a4bd] text-[#0b74ff] focus:ring-[#72ceff]"
+              />
+              <span>
+                I understand Rovik can be wrong, incomplete, or unsafe for some uses,
+                and I remain responsible for reviewing outputs, approvals, and actions.
+              </span>
+            </label>
+
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || !acceptedLegal || !acceptedAiRisk}
               className="mt-2 rounded-[1.4rem] bg-[linear-gradient(135deg,#0b74ff_0%,#30c2ff_100%)] px-4 py-3 text-sm font-semibold text-white shadow-[0_18px_40px_rgba(19,112,255,0.3)] transition hover:-translate-y-0.5 disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {loading ? "Creating account..." : "Create account"}
@@ -151,6 +220,9 @@ export default function SignupPage() {
               Sign in
             </Link>
           </p>
+          <div className="mt-5 border-t border-white/45 pt-4">
+            <LegalLinks compact showHub className="justify-center" />
+          </div>
         </div>
       </div>
     </main>

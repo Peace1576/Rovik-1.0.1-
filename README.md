@@ -50,6 +50,13 @@ The packaged app is written to:
 dist-electron/Rovik-win32-x64
 ```
 
+GitHub Releases:
+
+- The repo includes `.github/workflows/windows-release.yml`.
+- Push a tag like `v0.1.0`, or run the `Windows Release` workflow manually from GitHub Actions with a tag name.
+- The workflow builds the Windows desktop app, zips `dist-electron/Rovik-win32-x64`, and uploads `Rovik-win32-x64.zip` to the GitHub Release.
+- The in-app `/download` page automatically looks for the latest GitHub Release asset and uses it as the Windows download link.
+
 The desktop app keeps Eve alive while opening external sites and adds native Windows actions for:
 
 - opening apps like Calculator, Notepad, File Explorer, Settings, VS Code, Spotify, Chrome, Edge, Discord, Slack, and Outlook

@@ -12,6 +12,7 @@ import Link from "next/link";
 
 import { EveAvatar } from "@/components/eve-avatar";
 import type { ConversationState } from "@/lib/conversation-state";
+import { desktopCapabilityCards } from "@/lib/desktop-capabilities";
 import type { ClientAction } from "@/lib/eve-tools";
 import { createClient } from "@/lib/supabase/client";
 
@@ -1083,6 +1084,12 @@ export function EveConsole() {
             >
               Settings
             </Link>
+            <Link
+              href="/download"
+              className="rounded-full bg-[linear-gradient(135deg,#0b74ff_0%,#30c2ff_100%)] px-4 py-1.5 font-mono text-[0.68rem] uppercase tracking-[0.22em] text-white shadow-[0_12px_28px_rgba(19,112,255,0.22)] transition hover:-translate-y-0.5"
+            >
+              {desktopRuntime?.isDesktop ? "Desktop guide" : "Download app"}
+            </Link>
             {userEmail ? (
               <button
                 type="button"
@@ -1136,6 +1143,19 @@ export function EveConsole() {
                   bills, renewals, routines, purchases, and smart-device actions,
                   through a voice-first interface that feels present instead of passive.
                 </p>
+                <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
+                  <Link
+                    href="/download"
+                    className="rounded-full bg-[linear-gradient(135deg,#0b74ff_0%,#30c2ff_100%)] px-5 py-3 text-sm font-semibold text-white shadow-[0_18px_40px_rgba(19,112,255,0.3)] transition hover:-translate-y-0.5"
+                  >
+                    {desktopRuntime?.isDesktop
+                      ? "See desktop capabilities"
+                      : "Download Rovik for Windows"}
+                  </Link>
+                  <p className="text-xs uppercase tracking-[0.24em] text-[#5f738f] sm:text-[0.72rem]">
+                    Opens apps, folders, settings, and handoff surfaces without losing Eve
+                  </p>
+                </div>
               </div>
 
               <EveAvatar mood={mood} status={status} visemeLevel={visemeLevel} />
@@ -1339,6 +1359,45 @@ export function EveConsole() {
                 <p className="mt-3 text-[0.72rem] text-[#63758e]">
                   Risky actions (send email, event invites, purchases, cancels, door unlocks) always ask before running.
                 </p>
+              </section>
+
+              <section className="glass-panel rounded-[2rem] px-5 py-5">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="font-mono text-[0.68rem] uppercase tracking-[0.3em] text-[#63758e]">
+                      Rovik for Windows
+                    </p>
+                    <h3 className="mt-1 text-lg font-semibold tracking-[-0.04em] text-[#0b1321]">
+                      Install the desktop build
+                    </h3>
+                  </div>
+                  <span className="rounded-full border border-[#0b74ff]/20 bg-[rgba(11,116,255,0.08)] px-3 py-1 font-mono text-[0.62rem] uppercase tracking-[0.2em] text-[#0b74ff]">
+                    Desktop actions
+                  </span>
+                </div>
+                <p className="mt-3 text-sm leading-7 text-[#586983]">
+                  The Windows app keeps Eve live while she opens apps, folders,
+                  settings, and the next surface you need to work from.
+                </p>
+                <ul className="mt-4 space-y-2">
+                  {desktopCapabilityCards.slice(0, 3).map((capability) => (
+                    <li
+                      key={capability.title}
+                      className="rounded-[1.2rem] border border-white/60 bg-white/70 px-3 py-3 text-sm text-[#31425a]"
+                    >
+                      <p className="font-medium text-[#0b1321]">{capability.title}</p>
+                      <p className="mt-1 text-[0.82rem] leading-6 text-[#5d708b]">
+                        {capability.description}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+                <Link
+                  href="/download"
+                  className="mt-4 inline-flex rounded-full bg-[linear-gradient(135deg,#0b74ff_0%,#30c2ff_100%)] px-4 py-2 text-sm font-semibold text-white shadow-[0_16px_34px_rgba(19,112,255,0.24)] transition hover:-translate-y-0.5"
+                >
+                  Open download page
+                </Link>
               </section>
 
               {/* Open-in-new-tab card — always shown so user can bring the tab forward */}

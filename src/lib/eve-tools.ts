@@ -2,6 +2,19 @@ import { FunctionDeclaration, Type } from "@google/genai";
 
 export type ClientAction =
   | { type: "open_url"; url: string; description: string }
+  | { type: "desktop_open_app"; appName: string; label: string }
+  | { type: "desktop_open_path"; path: string; label: string }
+  | {
+      type: "desktop_system_action";
+      action:
+        | "open_settings"
+        | "open_wifi_settings"
+        | "open_bluetooth_settings"
+        | "open_display_settings"
+        | "open_sound_settings"
+        | "lock_device";
+      label: string;
+    }
   | { type: "play_youtube"; videoId: string; url: string; title: string; channel?: string }
   | { type: "set_reminder"; message: string; delay_minutes: number }
   | { type: "write_clipboard"; text: string }
@@ -34,6 +47,52 @@ export const EVE_FUNCTION_DECLARATIONS: FunctionDeclaration[] = [
         delay_minutes: { type: Type.NUMBER, description: "Minutes from now." },
       },
       required: ["message", "delay_minutes"],
+    },
+  },
+  {
+    name: "open_application",
+    description:
+      "Open a Windows desktop application when Rovik is running as the Windows desktop app. Use for apps like Calculator, Notepad, File Explorer, Settings, VS Code, Spotify, Discord, Slack, Chrome, Edge, or Outlook.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        app_name: {
+          type: Type.STRING,
+          description: "Application name or explicit executable path to open.",
+        },
+      },
+      required: ["app_name"],
+    },
+  },
+  {
+    name: "open_folder",
+    description:
+      "Open a local Windows folder in File Explorer when Rovik is running as the desktop app. Supports common folders like Downloads, Documents, Desktop, Pictures, Music, and Videos, or an absolute Windows path.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        path: {
+          type: Type.STRING,
+          description: "Folder alias or absolute Windows folder path.",
+        },
+      },
+      required: ["path"],
+    },
+  },
+  {
+    name: "windows_system_action",
+    description:
+      "Run a limited Windows system action when Rovik is the desktop app. Supported actions: open_settings, open_wifi_settings, open_bluetooth_settings, open_display_settings, open_sound_settings, lock_device.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        action: {
+          type: Type.STRING,
+          description:
+            "One of: open_settings, open_wifi_settings, open_bluetooth_settings, open_display_settings, open_sound_settings, lock_device.",
+        },
+      },
+      required: ["action"],
     },
   },
 

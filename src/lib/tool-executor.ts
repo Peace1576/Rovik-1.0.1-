@@ -1194,6 +1194,75 @@ function draftEmail(args: Record<string, unknown>): ToolResult {
   };
 }
 
+function openApplication(args: Record<string, unknown>): ToolResult {
+  const appName = String(args.app_name ?? "").trim();
+  if (!appName) {
+    return { toolOutput: { error: "app_name is required." } };
+  }
+
+  return {
+    toolOutput: { queued: true, app_name: appName },
+    clientAction: {
+      type: "desktop_open_app",
+      appName,
+      label: `Open ${appName}`,
+    },
+  };
+}
+
+function openFolder(args: Record<string, unknown>): ToolResult {
+  const folderPath = String(args.path ?? "").trim();
+  if (!folderPath) {
+    return { toolOutput: { error: "path is required." } };
+  }
+
+  return {
+    toolOutput: { queued: true, path: folderPath },
+    clientAction: {
+      type: "desktop_open_path",
+      path: folderPath,
+      label: `Open ${folderPath}`,
+    },
+  };
+}
+
+function windowsSystemAction(args: Record<string, unknown>): ToolResult {
+  const action = String(args.action ?? "").trim() as
+    | "open_settings"
+    | "open_wifi_settings"
+    | "open_bluetooth_settings"
+    | "open_display_settings"
+    | "open_sound_settings"
+    | "lock_device";
+
+  const supported = new Set([
+    "open_settings",
+    "open_wifi_settings",
+    "open_bluetooth_settings",
+    "open_display_settings",
+    "open_sound_settings",
+    "lock_device",
+  ]);
+
+  if (!supported.has(action)) {
+    return {
+      toolOutput: {
+        error:
+          "Unsupported Windows system action. Use open_settings, open_wifi_settings, open_bluetooth_settings, open_display_settings, open_sound_settings, or lock_device.",
+      },
+    };
+  }
+
+  return {
+    toolOutput: { queued: true, action },
+    clientAction: {
+      type: "desktop_system_action",
+      action,
+      label: action.replace(/_/g, " "),
+    },
+  };
+}
+
 // ── Home Operations ────────────────────────────────────────────────────────
 
 async function addBill(args: Record<string, unknown>, userId: string, supabase: SupabaseClient): Promise<ToolResult> {
@@ -1432,6 +1501,9 @@ export async function executeTool(
     case "draft_email": return draftEmail(args);
     case "write_clipboard": return writeClipboard(args);
     case "download_file": return downloadFile(args);
+    case "open_application": return openApplication(args);
+    case "open_folder": return openFolder(args);
+    case "windows_system_action": return windowsSystemAction(args);
 
     // Media & Creation
     case "search_youtube": return searchYoutube(args, userId, supabase);

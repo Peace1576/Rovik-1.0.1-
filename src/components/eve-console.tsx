@@ -18,6 +18,11 @@ import { createClient } from "@/lib/supabase/client";
 type Presence = "ready" | "thinking" | "speaking" | "error";
 type Mood = "warm" | "curious" | "focused" | "alert";
 type ModelMode = "live" | "offline";
+type DesktopRuntime = {
+  isDesktop: boolean;
+  platform: string;
+  appVersion: string;
+};
 
 type Message = {
   id: string;
@@ -175,6 +180,9 @@ export function EveConsole() {
   const [visemeLevel, setVisemeLevel] = useState(0.16);
   const [muted, setMuted] = useState(false);
   const [modelMode, setModelMode] = useState<ModelMode>("live");
+  const [desktopRuntime, setDesktopRuntime] = useState<DesktopRuntime | null>(
+    null,
+  );
   const [liveExcerpt, setLiveExcerpt] = useState(introMessage);
   const [recentActions, setRecentActions] = useState<ClientAction[]>([]);
   const [conversationState, setConversationState] = useState<ConversationState>({
@@ -236,6 +244,29 @@ export function EveConsole() {
       setUserEmail(session?.user?.email ?? null);
     });
     return () => subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadDesktopRuntime() {
+      try {
+        const runtime = await window.eveDesktop?.getRuntimeInfo?.();
+        if (active && runtime?.isDesktop) {
+          setDesktopRuntime(runtime);
+        }
+      } catch {
+        if (active) {
+          setDesktopRuntime(null);
+        }
+      }
+    }
+
+    void loadDesktopRuntime();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   // Auto-start wake word listener on mount
@@ -750,8 +781,60 @@ export function EveConsole() {
     }
   }
 
-  function openExternalTarget(url: string, label: string) {
+  function appendAssistantNote(note: string, nextMood: Mood = "alert") {
+    const assistantMessage: Message = {
+      id: makeId(),
+      role: "assistant",
+      content: note,
+      displayContent: note,
+    };
+
+    startTransition(() => {
+      setMessages((current) => [...current, assistantMessage]);
+    });
+    setStatus("ready");
+    setMood(nextMood);
+    setLiveExcerpt(note);
+  }
+
+  async function runDesktopAction(
+    label: string,
+    fn: (bridge: NonNullable<typeof window.eveDesktop>) => Promise<{
+      ok: boolean;
+      error?: string;
+    }>,
+  ) {
+    const bridge = window.eveDesktop;
+    if (!bridge) {
+      appendAssistantNote(
+        `${label} needs the Rovik Windows desktop app.`,
+      );
+      return false;
+    }
+
+    try {
+      const result = await fn(bridge);
+      if (!result.ok) {
+        appendAssistantNote(
+          result.error ? `${label} failed: ${result.error}` : `${label} failed.`,
+        );
+        return false;
+      }
+      return true;
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unknown desktop action error.";
+      appendAssistantNote(`${label} failed: ${message}`);
+      return false;
+    }
+  }
+
+  async function openExternalTarget(url: string, label: string) {
     setPendingUrl(null);
+
+    if (window.eveDesktop) {
+      return runDesktopAction(label, (bridge) => bridge.openExternal(url));
+    }
 
     const existing = externalWindowRef.current;
     if (existing && !existing.closed) {
@@ -800,7 +883,22 @@ export function EveConsole() {
         });
       }
       if (action.type === "open_url" && action.url) {
-        openExternalTarget(action.url, action.description ?? action.url);
+        await openExternalTarget(action.url, action.description ?? action.url);
+      }
+      if (action.type === "desktop_open_app") {
+        await runDesktopAction(action.label, (bridge) =>
+          bridge.openApp(action.appName),
+        );
+      }
+      if (action.type === "desktop_open_path") {
+        await runDesktopAction(action.label, (bridge) =>
+          bridge.openPath(action.path),
+        );
+      }
+      if (action.type === "desktop_system_action") {
+        await runDesktopAction(action.label, (bridge) =>
+          bridge.runSystemAction(action.action),
+        );
       }
       if (action.type === "set_reminder") {
         const delayMs = action.delay_minutes * 60_000;
@@ -815,7 +913,13 @@ export function EveConsole() {
       }
       if (action.type === "write_clipboard") {
         try {
-          await navigator.clipboard.writeText(action.text);
+          if (window.eveDesktop) {
+            await runDesktopAction("Copy to clipboard", (bridge) =>
+              bridge.writeClipboard(action.text),
+            );
+          } else {
+            await navigator.clipboard.writeText(action.text);
+          }
         } catch { /* clipboard permission denied */ }
       }
       if (action.type === "download_file") {
@@ -829,7 +933,7 @@ export function EveConsole() {
       }
       if (action.type === "draft_email") {
         const mailto = `mailto:${encodeURIComponent(action.to)}?subject=${encodeURIComponent(action.subject)}&body=${encodeURIComponent(action.body)}`;
-        window.open(mailto);
+        await openExternalTarget(mailto, `Draft email to ${action.to}`);
       }
       if (action.type === "show_image") {
         setGeneratedImage({ url: action.url, prompt: action.prompt });
@@ -1016,6 +1120,11 @@ export function EveConsole() {
                 <span className="rounded-full bg-[rgba(255,255,255,0.82)] px-3 py-1 font-mono text-[0.68rem] uppercase tracking-[0.22em] text-[#5a6d88]">
                   Digital life command center
                 </span>
+                {desktopRuntime?.isDesktop && (
+                  <span className="rounded-full bg-[rgba(11,116,255,0.1)] px-3 py-1 font-mono text-[0.68rem] uppercase tracking-[0.22em] text-[#0b74ff]">
+                    Windows desktop ready
+                  </span>
+                )}
               </div>
 
               <div className="max-w-2xl text-center">
@@ -1329,6 +1438,24 @@ export function EveConsole() {
                           <>
                             <p className="font-mono text-[0.62rem] uppercase tracking-[0.2em] text-[#5a708e]">Opened</p>
                             <p className="mt-1 truncate text-[0.85rem]">{action.description}</p>
+                          </>
+                        )}
+                        {action.type === "desktop_open_app" && (
+                          <>
+                            <p className="font-mono text-[0.62rem] uppercase tracking-[0.2em] text-[#5a708e]">Windows app</p>
+                            <p className="mt-1 text-[0.85rem]">{action.label}</p>
+                          </>
+                        )}
+                        {action.type === "desktop_open_path" && (
+                          <>
+                            <p className="font-mono text-[0.62rem] uppercase tracking-[0.2em] text-[#5a708e]">File Explorer</p>
+                            <p className="mt-1 text-[0.85rem]">{action.label}</p>
+                          </>
+                        )}
+                        {action.type === "desktop_system_action" && (
+                          <>
+                            <p className="font-mono text-[0.62rem] uppercase tracking-[0.2em] text-[#5a708e]">Windows action</p>
+                            <p className="mt-1 text-[0.85rem]">{action.label}</p>
                           </>
                         )}
                         {action.type === "play_youtube" && (

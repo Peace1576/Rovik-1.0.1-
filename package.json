@@ -2,11 +2,15 @@
   "name": "rovik-eve",
   "version": "0.1.0",
   "private": true,
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "desktop:dev": "concurrently -k \"npm run dev\" \"wait-on http://127.0.0.1:3000 && electron .\"",
+    "desktop:pack": "npm run build && electron-packager . Rovik --platform=win32 --arch=x64 --out=dist-electron --overwrite --ignore=dist-electron --ignore=docs --ignore=supabase --ignore=\\.git --ignore=\\.vercel --ignore=\\.next[/\\\\]cache --ignore=\\.env.* --ignore=.*\\.log",
+    "desktop:dist": "npm run desktop:pack"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
@@ -17,20 +21,20 @@
     "react-dom": "19.2.4"
   },
   "devDependencies": {
+    "@electron/packager": "^19.1.0",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "concurrently": "^9.2.1",
+    "electron": "^37.2.6",
     "eslint": "^9",
     "eslint-config-next": "16.2.3",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "wait-on": "^8.0.5"
   },
   "description": "Eve is a browser-based prototype for Rovik's home operations assistant. It pairs a centered robot head UI with a speech-synced face, Gemini-backed responses, and a responsive chat surface built for Vercel deployment.",
-  "main": "index.js",
-  "directories": {
-    "doc": "docs"
-  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Peace1576/Rovik-1.0.1-.git"

@@ -56,6 +56,7 @@ GitHub Releases:
 - Push a tag like `v0.1.0`, or run the `Windows Release` workflow manually from GitHub Actions with a tag name.
 - The workflow builds the Windows desktop app, zips `dist-electron/Rovik-win32-x64`, and uploads `Rovik-win32-x64.zip` to the GitHub Release.
 - The in-app `/download` page automatically looks for the latest GitHub Release asset and uses it as the Windows download link.
+- If the repo stays private, add `GITHUB_RELEASES_TOKEN` to Vercel so `/download` can resolve the private release asset server-side for users.
 
 The desktop app keeps Eve alive while opening external sites and adds native Windows actions for:
 

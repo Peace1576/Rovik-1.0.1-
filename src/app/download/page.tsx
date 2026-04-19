@@ -14,11 +14,11 @@ export const revalidate = 3600;
 
 export default async function DownloadPage() {
   const latestDesktopRelease = await getLatestDesktopRelease();
-  const desktopDownloadUrl =
+  const publicOverrideDownloadUrl =
     process.env.NEXT_PUBLIC_DESKTOP_DOWNLOAD_URL ||
-    process.env.ROVIK_DESKTOP_DOWNLOAD_URL ||
-    latestDesktopRelease?.assetUrl ||
-    null;
+    process.env.ROVIK_DESKTOP_DOWNLOAD_URL;
+  const hasHostedDownload = Boolean(publicOverrideDownloadUrl || latestDesktopRelease?.assetUrl);
+  const desktopDownloadUrl = publicOverrideDownloadUrl || "/api/releases/windows-download";
   const releasesPageUrl = latestDesktopRelease?.releaseUrl || GITHUB_RELEASES_PAGE_URL;
 
   return (
@@ -41,7 +41,7 @@ export default async function DownloadPage() {
             >
               Back to Eve
             </Link>
-            {desktopDownloadUrl ? (
+            {hasHostedDownload ? (
               <a
                 href={desktopDownloadUrl}
                 target="_blank"

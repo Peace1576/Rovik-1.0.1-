@@ -9,6 +9,7 @@ const LATEST_RELEASE_API_URL = `https://api.github.com/repos/${GITHUB_RELEASE_RE
 
 type GitHubReleaseAsset = {
   name?: string;
+  url?: string;
   browser_download_url?: string;
 };
 
@@ -20,12 +21,31 @@ type GitHubLatestRelease = {
 };
 
 export type LatestDesktopRelease = {
+  assetApiUrl: string | null;
   assetName: string | null;
   assetUrl: string | null;
   publishedAt: string | null;
   releaseUrl: string;
   version: string | null;
 };
+
+function getGitHubReleasesToken() {
+  return (
+    process.env.GITHUB_RELEASES_TOKEN ||
+    process.env.GITHUB_TOKEN ||
+    null
+  );
+}
+
+function getGitHubHeaders(accept = "application/vnd.github+json") {
+  const token = getGitHubReleasesToken();
+
+  return {
+    Accept: accept,
+    "User-Agent": "Rovik-Desktop-Release-Resolver",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
 
 function isWindowsDesktopAsset(assetName: string) {
   const normalized = assetName.toLowerCase();
@@ -39,10 +59,7 @@ function isWindowsDesktopAsset(assetName: string) {
 export async function getLatestDesktopRelease(): Promise<LatestDesktopRelease | null> {
   try {
     const response = await fetch(LATEST_RELEASE_API_URL, {
-      headers: {
-        Accept: "application/vnd.github+json",
-        "User-Agent": "Rovik-Desktop-Release-Resolver",
-      },
+      headers: getGitHubHeaders(),
       next: { revalidate: 3600 },
     });
 
@@ -60,6 +77,7 @@ export async function getLatestDesktopRelease(): Promise<LatestDesktopRelease | 
       ) ?? null;
 
     return {
+      assetApiUrl: asset?.url ?? null,
       assetName: asset?.name ?? null,
       assetUrl: asset?.browser_download_url ?? null,
       publishedAt: release.published_at ?? null,
@@ -69,4 +87,31 @@ export async function getLatestDesktopRelease(): Promise<LatestDesktopRelease | 
   } catch {
     return null;
   }
+}
+
+export async function getLatestDesktopReleaseDownloadUrl(): Promise<string | null> {
+  const latestRelease = await getLatestDesktopRelease();
+  if (!latestRelease) return null;
+
+  const token = getGitHubReleasesToken();
+  if (!token || !latestRelease.assetApiUrl) {
+    return latestRelease.assetUrl;
+  }
+
+  try {
+    const assetResponse = await fetch(latestRelease.assetApiUrl, {
+      headers: getGitHubHeaders("application/octet-stream"),
+      cache: "no-store",
+      redirect: "manual",
+    });
+
+    const location = assetResponse.headers.get("location");
+    if (location) {
+      return location;
+    }
+  } catch {
+    return latestRelease.assetUrl;
+  }
+
+  return latestRelease.assetUrl;
 }

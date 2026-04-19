@@ -66,10 +66,12 @@ GitHub Releases:
 
 - The repo includes `.github/workflows/windows-release.yml`.
 - Push a tag like `v0.1.0`, or run the `Windows Release` workflow manually from GitHub Actions with a tag name.
-- The workflow builds the Windows installer and uploads `Rovik-Setup-<version>.exe` to the GitHub Release.
+- The workflow now requires Azure Artifact Signing / Trusted Signing configuration before it will publish a new Windows release.
+- The workflow signs the packaged desktop binaries, signs the final installer, and uploads `Rovik-Setup-<version>.exe` plus a `.sha256.txt` checksum file to the GitHub Release.
 - The in-app `/download` page automatically looks for the latest GitHub Release asset and uses it as the Windows download link.
 - If the repo stays private, add `GITHUB_RELEASES_TOKEN` to Vercel so `/download` can resolve the private release asset server-side for users.
-- Because the app is not code-signed yet, Windows SmartScreen may ask users to click `More info` and then `Run anyway` on first launch.
+- Until Azure signing is configured and a new release is published, existing older installers may still show SmartScreen warnings.
+- Setup details are documented in [Windows code signing](docs/windows-code-signing.md).
 
 The desktop app keeps Eve alive while opening external sites and adds native Windows actions for:
 

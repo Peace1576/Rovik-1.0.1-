@@ -10,8 +10,10 @@
     "start": "next start",
     "lint": "eslint",
     "desktop:dev": "concurrently -k \"npm run dev\" \"wait-on http://127.0.0.1:3000 && electron .\"",
-    "desktop:pack": "npm run build && electron-packager . Rovik --platform=win32 --arch=x64 --out=dist-electron --overwrite --ignore=dist-electron --ignore=docs --ignore=supabase --ignore=\\.git --ignore=\\.vercel --ignore=\\.next[/\\\\]cache --ignore=\\.env.* --ignore=.*\\.log",
-    "desktop:dist": "npm run desktop:pack && electron-builder --win nsis --prepackaged dist-electron/Rovik-win32-x64 --publish never"
+    "desktop:pack:app": "electron-packager . Rovik --platform=win32 --arch=x64 --out=dist-electron --overwrite --ignore=dist-electron --ignore=docs --ignore=supabase --ignore=\\.git --ignore=\\.vercel --ignore=\\.next[/\\\\]cache --ignore=\\.env.* --ignore=.*\\.log",
+    "desktop:pack": "npm run build && npm run desktop:pack:app",
+    "desktop:dist:installer": "electron-builder --win nsis --prepackaged dist-electron/Rovik-win32-x64 --publish never",
+    "desktop:dist": "npm run build && npm run desktop:pack:app && npm run desktop:dist:installer"
   },
   "build": {
     "appId": "com.rovik.desktop",

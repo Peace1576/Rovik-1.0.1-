@@ -193,6 +193,7 @@ export function EveConsole() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [generatedImage, setGeneratedImage] = useState<{ url: string; prompt: string } | null>(null);
   const [activeVideo, setActiveVideo] = useState<ActiveVideo | null>(null);
+  const [desktopTranscriptOpen, setDesktopTranscriptOpen] = useState(false);
   // When Chrome blocks window.open (async context), store url here so user can tap it
   const [pendingUrl, setPendingUrl] = useState<{ url: string; label: string } | null>(null);
   // Voice mode: off | standby (wake-word listener) | listening (active recording)
@@ -1051,6 +1052,73 @@ export function EveConsole() {
     void submitPrompt();
   }
 
+  const isDesktopShell = !!desktopRuntime?.isDesktop;
+  const statusLabel =
+    status === "thinking"
+      ? "Processing the next move..."
+      : status === "speaking"
+        ? "Speaking live..."
+        : status === "error"
+          ? "Needs attention"
+          : "Standing by";
+
+  const transcriptPanel = (
+    <section className="glass-panel rounded-[2rem] px-4 py-4 sm:px-5">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div>
+          <p className="font-mono text-[0.68rem] uppercase tracking-[0.3em] text-[#63758e]">
+            Conversation stream
+          </p>
+          <h3 className="mt-1 text-lg font-semibold tracking-[-0.04em] text-[#0b1321]">
+            Live transcript
+          </h3>
+        </div>
+        <p className="font-mono text-[0.68rem] uppercase tracking-[0.22em] text-[#6d8099]">
+          {messages.length} entries
+        </p>
+      </div>
+
+      <div
+        ref={transcriptBoxRef}
+        onScroll={() => {
+          const el = transcriptBoxRef.current;
+          if (!el) return;
+          userScrolledRef.current =
+            el.scrollTop + el.clientHeight < el.scrollHeight - 60;
+        }}
+        className="transcript-fade flex max-h-[36rem] flex-col gap-3 overflow-y-auto pr-1"
+      >
+        {messages.map((message) => {
+          const text = message.displayContent ?? message.content;
+          const isUser = message.role === "user";
+
+          return (
+            <article
+              key={message.id}
+              className={`max-w-[92%] rounded-[1.6rem] px-4 py-3 shadow-[0_16px_34px_rgba(11,24,43,0.08)] ${
+                isUser
+                  ? "ml-auto bg-[linear-gradient(180deg,#0f1f38_0%,#13284d_100%)] text-white"
+                  : "border border-white/60 bg-white/80 text-[#10213a]"
+              }`}
+            >
+              <p
+                className={`font-mono text-[0.62rem] uppercase tracking-[0.28em] ${
+                  isUser ? "text-white/62" : "text-[#6b7d95]"
+                }`}
+              >
+                {isUser ? "You" : "Eve"}
+              </p>
+              <p className="mt-2 whitespace-pre-wrap text-sm leading-7 sm:text-[0.95rem]">
+                {text}
+              </p>
+            </article>
+          );
+        })}
+        <div ref={transcriptEndRef} />
+      </div>
+    </section>
+  );
+
   return (
     <main className="min-h-screen px-4 pb-8 pt-5 sm:px-6 lg:px-8">
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
@@ -1174,27 +1242,111 @@ export function EveConsole() {
 
               <EveAvatar mood={mood} status={status} visemeLevel={visemeLevel} />
 
-              <div className="glass-panel w-full max-w-3xl rounded-[2rem] px-5 py-4 sm:px-6">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <p className="font-mono text-[0.68rem] uppercase tracking-[0.3em] text-[#64768e]">
-                      Eve status
-                    </p>
-                    <p className="mt-1 text-xl font-medium tracking-[-0.04em] text-[#09101d]">
-                      {status === "thinking"
-                        ? "Processing the next move..."
-                        : status === "speaking"
-                          ? "Speaking live..."
-                          : status === "error"
-                            ? "Needs attention"
-                            : "Standing by"}
+              {isDesktopShell ? (
+                <form
+                  onSubmit={handleSubmit}
+                  className="flex w-full max-w-4xl items-end gap-3"
+                >
+                  <button
+                    type="submit"
+                    disabled={status === "thinking" || voiceState === "listening"}
+                    className="shrink-0 rounded-[1.4rem] border border-[#0b74ff]/25 bg-white/85 px-5 py-4 text-sm font-semibold text-[#0b74ff] shadow-[0_14px_30px_rgba(11,116,255,0.12)] transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Send to Eve
+                  </button>
+
+                  <div className="glass-panel flex-1 rounded-[2rem] px-5 py-4 sm:px-6">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="shrink-0">
+                        <p className="font-mono text-[0.68rem] uppercase tracking-[0.3em] text-[#64768e]">
+                          Eve status
+                        </p>
+                        <p className="mt-1 text-lg font-medium tracking-[-0.04em] text-[#09101d]">
+                          {statusLabel}
+                        </p>
+                      </div>
+                      <div className="min-w-[16rem] flex-1">
+                        <textarea
+                          value={prompt}
+                          onChange={(event) => setPrompt(event.target.value)}
+                          placeholder="Ask Eve to run a home task, open an app, search, or take the next step."
+                          className="min-h-[4.5rem] w-full resize-none rounded-[1.4rem] border border-white/70 bg-white/75 px-4 py-3 text-sm leading-7 text-[#10213a] outline-none transition placeholder:text-[#7b8da4] focus:border-[#72ceff] focus:ring-4 focus:ring-[#72ceff]/18"
+                        />
+                        <p className="mt-2 text-sm leading-6 text-[#586983]">
+                          {voiceState === "listening" && interimTranscript
+                            ? interimTranscript
+                            : liveExcerpt}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={tapMic}
+                    aria-label={
+                      voiceState === "listening"
+                        ? "Stop voice input"
+                        : "Start voice input"
+                    }
+                    title={
+                      voiceState === "listening"
+                        ? "Stop listening"
+                        : voiceState === "standby"
+                          ? "Tap to speak now (or say 'Eve')"
+                          : "Tap to speak"
+                    }
+                    className={`relative shrink-0 overflow-hidden rounded-[1.4rem] px-5 py-4 text-sm font-semibold transition hover:-translate-y-0.5 ${
+                      voiceState === "listening"
+                        ? "bg-red-500 text-white shadow-[0_0_0_3px_rgba(239,68,68,0.25)]"
+                        : voiceState === "standby"
+                          ? "border border-[#2bb6ff]/50 bg-[rgba(43,182,255,0.1)] text-[#1a7fc4]"
+                          : "border border-white/70 bg-white/80 text-[#24344b]"
+                    }`}
+                  >
+                    {voiceState === "listening" && silenceProgress > 0 && (
+                      <span
+                        className="absolute inset-0 rounded-[1.4rem]"
+                        style={{
+                          background: `conic-gradient(rgba(255,255,255,0.35) ${silenceProgress * 360}deg, transparent 0deg)`,
+                        }}
+                      />
+                    )}
+                    <span className="relative flex items-center justify-center">
+                      <MicIcon active={voiceState === "listening"} />
+                      {voiceState !== "off" ? (
+                        <span
+                          className={`absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full border border-white/70 ${
+                            voiceState === "listening" ? "bg-white" : "bg-[#2bb6ff]"
+                          }`}
+                        />
+                      ) : null}
+                    </span>
+                  </button>
+                </form>
+              ) : (
+                <div className="glass-panel w-full max-w-3xl rounded-[2rem] px-5 py-4 sm:px-6">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="font-mono text-[0.68rem] uppercase tracking-[0.3em] text-[#64768e]">
+                        Eve status
+                      </p>
+                      <p className="mt-1 text-xl font-medium tracking-[-0.04em] text-[#09101d]">
+                        {statusLabel}
+                      </p>
+                    </div>
+                    <p className="max-w-xl text-sm leading-7 text-[#586983]">
+                      {liveExcerpt}
                     </p>
                   </div>
-                  <p className="max-w-xl text-sm leading-7 text-[#586983]">
-                    {liveExcerpt}
-                  </p>
                 </div>
-              </div>
+              )}
+
+              {isDesktopShell && voiceState === "standby" && (
+                <p className="font-mono text-[0.68rem] uppercase tracking-[0.22em] text-[#4a90c4]/80">
+                  Listening for &quot;Eve&quot;...
+                </p>
+              )}
 
               <div className="flex flex-wrap justify-center gap-3">
                 {quickPrompts.map((quickPrompt) => (
@@ -1211,62 +1363,193 @@ export function EveConsole() {
             </div>
           </div>
 
-          <div className="grid w-full max-w-6xl gap-6 lg:grid-cols-[1.15fr_0.85fr]">
-            <section className="glass-panel rounded-[2rem] px-4 py-4 sm:px-5">
-              <div className="mb-4 flex items-center justify-between gap-3">
+          {isDesktopShell ? (
+            <div className="flex w-full max-w-4xl flex-col gap-4">
+              <button
+                type="button"
+                onClick={() => setDesktopTranscriptOpen((current) => !current)}
+                className="glass-panel flex items-center justify-between rounded-[1.6rem] px-5 py-4 text-left transition hover:-translate-y-0.5"
+              >
                 <div>
                   <p className="font-mono text-[0.68rem] uppercase tracking-[0.3em] text-[#63758e]">
-                    Conversation stream
+                    Transcript
                   </p>
-                  <h3 className="mt-1 text-lg font-semibold tracking-[-0.04em] text-[#0b1321]">
-                    Live transcript
-                  </h3>
+                  <p className="mt-1 text-base font-semibold tracking-[-0.03em] text-[#0b1321]">
+                    {desktopTranscriptOpen ? "Close live transcript" : "Open live transcript"}
+                  </p>
                 </div>
-                <p className="font-mono text-[0.68rem] uppercase tracking-[0.22em] text-[#6d8099]">
-                  {messages.length} entries
-                </p>
-              </div>
+                <div className="flex items-center gap-4">
+                  <p className="font-mono text-[0.68rem] uppercase tracking-[0.22em] text-[#6d8099]">
+                    {messages.length} entries
+                  </p>
+                  <span className="rounded-full border border-white/60 bg-white/70 px-3 py-1 text-sm font-medium text-[#24344b]">
+                    {desktopTranscriptOpen ? "Hide" : "Show"}
+                  </span>
+                </div>
+              </button>
 
-              <div
-                ref={transcriptBoxRef}
-                onScroll={() => {
-                  const el = transcriptBoxRef.current;
-                  if (!el) return;
-                  userScrolledRef.current = el.scrollTop + el.clientHeight < el.scrollHeight - 60;
-                }}
-                className="transcript-fade flex max-h-[36rem] flex-col gap-3 overflow-y-auto pr-1"
-              >
-                {messages.map((message) => {
-                  const text = message.displayContent ?? message.content;
-                  const isUser = message.role === "user";
+              {desktopTranscriptOpen && transcriptPanel}
 
-                  return (
-                    <article
-                      key={message.id}
-                      className={`max-w-[92%] rounded-[1.6rem] px-4 py-3 shadow-[0_16px_34px_rgba(11,24,43,0.08)] ${
-                        isUser
-                          ? "ml-auto bg-[linear-gradient(180deg,#0f1f38_0%,#13284d_100%)] text-white"
-                          : "border border-white/60 bg-white/80 text-[#10213a]"
-                      }`}
+              {pendingUrl && (
+                <div className="glass-panel rounded-[2rem] border border-[#2bb6ff]/30 bg-[rgba(43,182,255,0.06)] px-5 py-4 flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="font-mono text-[0.65rem] uppercase tracking-[0.2em] text-[#1a7fc4]">Opens in new tab</p>
+                    <p className="mt-1 text-sm font-semibold text-[#09101d] truncate">{pendingUrl.label}</p>
+                  </div>
+                  <div className="flex items-center gap-3 text-xs font-medium shrink-0">
+                    <a
+                      href={pendingUrl.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={() => setPendingUrl(null)}
+                      className="rounded-full bg-[linear-gradient(135deg,#0b74ff,#30c2ff)] px-4 py-2 text-white shadow-sm hover:opacity-90"
                     >
-                      <p
-                        className={`font-mono text-[0.62rem] uppercase tracking-[0.28em] ${
-                          isUser ? "text-white/62" : "text-[#6b7d95]"
-                        }`}
-                      >
-                        {isUser ? "You" : "Eve"}
-                      </p>
-                      <p className="mt-2 whitespace-pre-wrap text-sm leading-7 sm:text-[0.95rem]">
-                        {text}
-                      </p>
-                    </article>
-                  );
-                })}
-                <div ref={transcriptEndRef} />
-              </div>
-            </section>
+                      Open
+                    </a>
+                    <button onClick={() => setPendingUrl(null)} className="text-[#5c718d] hover:text-[#09101d]">
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+              )}
 
-            <aside className="flex flex-col gap-6">
+              {generatedImage && (
+                <div className="glass-panel rounded-[2rem] overflow-hidden">
+                  <div className="flex items-center justify-between px-4 py-2">
+                    <p className="font-mono text-[0.65rem] uppercase tracking-[0.2em] text-[#5c718d]">Generated Image</p>
+                    <button onClick={() => setGeneratedImage(null)} className="text-[#5c718d] hover:text-[#09101d] text-sm font-medium">Close</button>
+                  </div>
+                  <Image
+                    src={generatedImage.url}
+                    alt={generatedImage.prompt}
+                    width={1024}
+                    height={1024}
+                    unoptimized
+                    className="h-auto max-h-80 w-full object-cover"
+                  />
+                  <p className="px-4 py-2 text-xs text-[#5c718d] italic">{generatedImage.prompt}</p>
+                </div>
+              )}
+
+              {activeVideo && (
+                <div className="glass-panel overflow-hidden rounded-[2rem]">
+                  <div className="flex flex-wrap items-start justify-between gap-3 px-4 py-3">
+                    <div>
+                      <p className="font-mono text-[0.65rem] uppercase tracking-[0.2em] text-[#5c718d]">Now Playing</p>
+                      <p className="mt-1 text-sm font-semibold text-[#09101d]">{activeVideo.title}</p>
+                      {activeVideo.channel && (
+                        <p className="mt-1 text-xs text-[#5c718d]">{activeVideo.channel}</p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3 text-xs font-medium">
+                      <a
+                        href={activeVideo.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-[#1b4d9b] hover:text-[#09101d]"
+                      >
+                        Open on YouTube
+                      </a>
+                      <button
+                        onClick={() => setActiveVideo(null)}
+                        className="text-[#5c718d] hover:text-[#09101d]"
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </div>
+                  <div className="aspect-video bg-black">
+                    <iframe
+                      key={activeVideo.videoId}
+                      src={`https://www.youtube-nocookie.com/embed/${activeVideo.videoId}?autoplay=1&rel=0&playsinline=1`}
+                      title={activeVideo.title}
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                      allowFullScreen
+                      className="h-full w-full border-0"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {recentActions.length > 0 && (
+                <section className="glass-panel rounded-[2rem] px-5 py-5">
+                  <p className="font-mono text-[0.68rem] uppercase tracking-[0.3em] text-[#63758e]">
+                    Actions taken
+                  </p>
+                  <ul className="mt-3 space-y-2">
+                    {recentActions.map((action, i) => (
+                      <li
+                        key={i}
+                        className="rounded-[1.2rem] border border-white/60 bg-white/70 px-3 py-2.5 text-sm text-[#31425a]"
+                      >
+                        {action.type === "open_url" && (
+                          <>
+                            <p className="font-mono text-[0.62rem] uppercase tracking-[0.2em] text-[#5a708e]">Opened</p>
+                            <p className="mt-1 truncate text-[0.85rem]">{action.description}</p>
+                          </>
+                        )}
+                        {action.type === "desktop_open_app" && (
+                          <>
+                            <p className="font-mono text-[0.62rem] uppercase tracking-[0.2em] text-[#5a708e]">Windows app</p>
+                            <p className="mt-1 text-[0.85rem]">{action.label}</p>
+                          </>
+                        )}
+                        {action.type === "desktop_open_path" && (
+                          <>
+                            <p className="font-mono text-[0.62rem] uppercase tracking-[0.2em] text-[#5a708e]">File Explorer</p>
+                            <p className="mt-1 text-[0.85rem]">{action.label}</p>
+                          </>
+                        )}
+                        {action.type === "desktop_system_action" && (
+                          <>
+                            <p className="font-mono text-[0.62rem] uppercase tracking-[0.2em] text-[#5a708e]">Windows action</p>
+                            <p className="mt-1 text-[0.85rem]">{action.label}</p>
+                          </>
+                        )}
+                        {action.type === "play_youtube" && (
+                          <>
+                            <p className="font-mono text-[0.62rem] uppercase tracking-[0.2em] text-[#5a708e]">Playing YouTube</p>
+                            <p className="mt-1 text-[0.85rem]">{action.title}</p>
+                            {action.channel && (
+                              <p className="mt-1 text-[0.78rem] text-[#5a708e]">{action.channel}</p>
+                            )}
+                          </>
+                        )}
+                        {action.type === "set_reminder" && (
+                          <>
+                            <p className="font-mono text-[0.62rem] uppercase tracking-[0.2em] text-[#5a708e]">Reminder in {action.delay_minutes}m</p>
+                            <p className="mt-1 text-[0.85rem]">{action.message}</p>
+                          </>
+                        )}
+                        {action.type === "write_clipboard" && (
+                          <>
+                            <p className="font-mono text-[0.62rem] uppercase tracking-[0.2em] text-[#5a708e]">Copied to clipboard</p>
+                            <p className="mt-1 truncate text-[0.85rem]">{action.text}</p>
+                          </>
+                        )}
+                        {action.type === "download_file" && (
+                          <>
+                            <p className="font-mono text-[0.62rem] uppercase tracking-[0.2em] text-[#5a708e]">Downloaded</p>
+                            <p className="mt-1 text-[0.85rem]">{action.filename}</p>
+                          </>
+                        )}
+                        {action.type === "draft_email" && (
+                          <>
+                            <p className="font-mono text-[0.62rem] uppercase tracking-[0.2em] text-[#5a708e]">Email draft To: {action.to}</p>
+                            <p className="mt-1 text-[0.85rem]">{action.subject}</p>
+                          </>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+            </div>
+          ) : (
+            <div className="grid w-full max-w-6xl gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+              {transcriptPanel}
+
+              <aside className="flex flex-col gap-6">
               <section className="glass-panel rounded-[2rem] px-5 py-5">
                 <div>
                   <p className="font-mono text-[0.68rem] uppercase tracking-[0.3em] text-[#63758e]">
@@ -1569,8 +1852,9 @@ export function EveConsole() {
                   </ul>
                 </section>
               )}
-            </aside>
-          </div>
+              </aside>
+            </div>
+          )}
         </section>
       </div>
     </main>

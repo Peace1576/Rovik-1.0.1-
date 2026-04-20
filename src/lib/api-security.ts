@@ -42,6 +42,15 @@ export function jsonNoStore(
 }
 
 export function rejectCrossSiteRequest(request: NextRequest) {
+  const desktopToken = request.headers.get("x-rovik-desktop-token");
+  if (
+    desktopToken &&
+    process.env.ROVIK_DESKTOP_SESSION_TOKEN &&
+    desktopToken === process.env.ROVIK_DESKTOP_SESSION_TOKEN
+  ) {
+    return null;
+  }
+
   const secFetchSite = request.headers.get("sec-fetch-site");
   if (secFetchSite === "cross-site") {
     return jsonNoStore({ error: "Forbidden" }, 403);

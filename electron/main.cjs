@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
+const crypto = require("node:crypto");
 const path = require("node:path");
 
 const { app, BrowserWindow, ipcMain, shell } = require("electron");
@@ -14,6 +15,11 @@ const {
 
 let mainWindow = null;
 let embeddedServer = null;
+const desktopSessionToken = crypto.randomUUID();
+
+if (!process.env.ROVIK_DESKTOP_SESSION_TOKEN) {
+  process.env.ROVIK_DESKTOP_SESSION_TOKEN = desktopSessionToken;
+}
 
 function isDevelopment() {
   return !app.isPackaged;
@@ -61,6 +67,7 @@ function registerDesktopHandlers() {
 
 async function createWindow() {
   const startUrl = await getRendererUrl();
+  const startOrigin = new URL(startUrl).origin;
 
   mainWindow = new BrowserWindow({
     width: 1520,
@@ -77,6 +84,15 @@ async function createWindow() {
       sandbox: false,
     },
   });
+
+  mainWindow.webContents.session.webRequest.onBeforeSendHeaders(
+    { urls: [`${startOrigin}/*`] },
+    (details, callback) => {
+      details.requestHeaders["x-rovik-desktop-token"] =
+        process.env.ROVIK_DESKTOP_SESSION_TOKEN;
+      callback({ requestHeaders: details.requestHeaders });
+    },
+  );
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url);

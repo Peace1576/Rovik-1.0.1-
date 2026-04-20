@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const crypto = require("node:crypto");
+const fs = require("node:fs");
 const path = require("node:path");
 
 const { app, BrowserWindow, ipcMain, shell } = require("electron");
@@ -16,6 +17,88 @@ const {
 let mainWindow = null;
 let embeddedServer = null;
 const desktopSessionToken = crypto.randomUUID();
+
+function loadBundledDesktopEnv() {
+  const candidates = [
+    path.join(path.resolve(__dirname, ".."), "desktop-env.json"),
+    path.join(process.cwd(), "desktop-env.json"),
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      if (!fs.existsSync(candidate)) continue;
+      const parsed = JSON.parse(fs.readFileSync(candidate, "utf8"));
+      if (!parsed || typeof parsed !== "object") continue;
+
+      for (const [key, rawValue] of Object.entries(parsed)) {
+        if (typeof rawValue !== "string") continue;
+        const value = rawValue.trim();
+        if (!value || process.env[key]) continue;
+        process.env[key] = value;
+      }
+
+      break;
+    } catch {
+      /* ignore invalid packaged env */
+    }
+  }
+
+  if (!process.env.GOOGLE_API_KEY && process.env.GEMINI_API_KEY) {
+    process.env.GOOGLE_API_KEY = process.env.GEMINI_API_KEY;
+  }
+}
+
+function isTrustedDesktopOrigin(origin) {
+  try {
+    const parsed = new URL(origin);
+    return (
+      parsed.protocol === "http:" &&
+      (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function registerMediaPermissionHandlers(session) {
+  session.setPermissionCheckHandler(
+    (_webContents, permission, requestingOrigin, details) => {
+      const requestOrigin =
+        details?.requestingUrl ?? details?.securityOrigin ?? requestingOrigin;
+
+      if (
+        (permission === "media" || permission === "audioCapture") &&
+        isTrustedDesktopOrigin(requestOrigin)
+      ) {
+        return true;
+      }
+
+      return false;
+    },
+  );
+
+  session.setPermissionRequestHandler(
+    (_webContents, permission, callback, details) => {
+      const requestOrigin =
+        details?.requestingUrl ?? details?.securityOrigin ?? "";
+      const mediaTypes = Array.isArray(details?.mediaTypes)
+        ? details.mediaTypes
+        : [];
+
+      const allowMedia =
+        permission === "media" &&
+        isTrustedDesktopOrigin(requestOrigin) &&
+        (mediaTypes.length === 0 || mediaTypes.includes("audio"));
+      const allowAudioCapture =
+        permission === "audioCapture" &&
+        isTrustedDesktopOrigin(requestOrigin);
+
+      callback(allowMedia || allowAudioCapture);
+    },
+  );
+}
+
+loadBundledDesktopEnv();
 
 if (!process.env.ROVIK_DESKTOP_SESSION_TOKEN) {
   process.env.ROVIK_DESKTOP_SESSION_TOKEN = desktopSessionToken;
@@ -84,6 +167,8 @@ async function createWindow() {
       sandbox: false,
     },
   });
+
+  registerMediaPermissionHandlers(mainWindow.webContents.session);
 
   mainWindow.webContents.session.webRequest.onBeforeSendHeaders(
     { urls: [`${startOrigin}/*`] },

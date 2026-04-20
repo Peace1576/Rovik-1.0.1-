@@ -22,6 +22,7 @@ jobs:
     env:
       NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
       NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
     steps:
       - name: Check out repository
@@ -41,6 +42,7 @@ jobs:
             "AZURE_TRUSTED_SIGNING_PROFILE_NAME" = "${{ vars.AZURE_TRUSTED_SIGNING_PROFILE_NAME }}"
             "NEXT_PUBLIC_SUPABASE_URL" = "${{ vars.NEXT_PUBLIC_SUPABASE_URL }}"
             "NEXT_PUBLIC_SUPABASE_ANON_KEY" = "${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}"
+            "GEMINI_API_KEY" = "${{ secrets.GEMINI_API_KEY }}"
           }
 
           $missing = @(
@@ -64,6 +66,18 @@ jobs:
 
       - name: Build Next.js app
         run: npm run build
+
+      - name: Write desktop runtime env
+        shell: pwsh
+        run: |
+          $desktopEnv = @{
+            GEMINI_API_KEY = "${{ secrets.GEMINI_API_KEY }}"
+            GOOGLE_API_KEY = "${{ secrets.GEMINI_API_KEY }}"
+            NEXT_PUBLIC_SUPABASE_URL = "${{ vars.NEXT_PUBLIC_SUPABASE_URL }}"
+            NEXT_PUBLIC_SUPABASE_ANON_KEY = "${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}"
+          } | ConvertTo-Json
+
+          Set-Content -Path "$env:GITHUB_WORKSPACE\\desktop-env.json" -Value $desktopEnv -Encoding utf8
 
       - name: Package desktop app payload
         run: npm run desktop:pack:app

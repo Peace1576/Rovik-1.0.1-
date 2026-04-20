@@ -220,6 +220,8 @@ export function EveConsole() {
   const wakeWatchdogRef = useRef<number | null>(null);  // setInterval health check
   const postReplyTimerRef = useRef<number | null>(null);
   const externalWindowRef = useRef<Window | null>(null);
+  const micReadyRef = useRef(false);
+  const micInitPromiseRef = useRef<Promise<boolean> | null>(null);
 
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
   const transcriptBoxRef = useRef<HTMLDivElement | null>(null);
@@ -279,6 +281,19 @@ export function EveConsole() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!desktopRuntime?.isDesktop) return;
+
+    void (async () => {
+      const ready = await ensureMicrophoneReady(true);
+      if (!ready || voiceStateRef.current === "listening") return;
+      stopListening();
+      setVoiceSynced("standby");
+      window.setTimeout(startWakeWordListener, 150);
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [desktopRuntime?.isDesktop]);
 
   // Auto-start wake word listener on mount
   useEffect(() => {
@@ -520,6 +535,72 @@ export function EveConsole() {
     setVoiceState(state);
   }
 
+  async function ensureMicrophoneReady(quiet = false) {
+    if (micReadyRef.current) return true;
+    if (typeof window === "undefined") return false;
+
+    const getUserMedia = navigator.mediaDevices?.getUserMedia?.bind(
+      navigator.mediaDevices,
+    );
+    if (!getUserMedia) return true;
+
+    if (micInitPromiseRef.current) {
+      return micInitPromiseRef.current;
+    }
+
+    micInitPromiseRef.current = getUserMedia({ audio: true })
+      .then((stream) => {
+        stream.getTracks().forEach((track) => track.stop());
+        micReadyRef.current = true;
+        return true;
+      })
+      .catch((error: unknown) => {
+        const name =
+          typeof error === "object" &&
+          error &&
+          "name" in error &&
+          typeof error.name === "string"
+            ? error.name
+            : "MicrophoneError";
+
+        if (!quiet) {
+          if (
+            name === "NotAllowedError" ||
+            name === "PermissionDeniedError"
+          ) {
+            appendAssistantNote(
+              "Rovik needs microphone access in the desktop app. Check Windows microphone permissions, then try the mic again.",
+              "alert",
+            );
+          } else if (name === "NotFoundError") {
+            appendAssistantNote(
+              "Rovik couldn't find a working microphone on this device. Check the Windows input device and try again.",
+              "alert",
+            );
+          } else {
+            appendAssistantNote(
+              `Rovik couldn't start the microphone (${name}). Check the Windows input device and try again.`,
+              "alert",
+            );
+          }
+        }
+
+        if (
+          name === "NotAllowedError" ||
+          name === "PermissionDeniedError"
+        ) {
+          setVoiceSynced("off");
+        }
+
+        return false;
+      })
+      .finally(() => {
+        micInitPromiseRef.current = null;
+      });
+
+    return micInitPromiseRef.current;
+  }
+
   // ══════════════════════════════════════════════════════════════════════════
   // VOICE MACHINE  (rebuilt — clean 3-state loop)
   //
@@ -661,6 +742,17 @@ export function EveConsole() {
     rec.onerror = (e: any) => {
       if (sessionIdRef.current !== sid) return;
       if (e.error === "aborted" || e.error === "no-speech") return; // onend handles
+      if (e.error === "audio-capture") {
+        appendAssistantNote(
+          "Rovik couldn't hear a working microphone. Check the Windows input device, then try again.",
+          "alert",
+        );
+      } else if (e.error === "network" || e.error === "service-not-allowed") {
+        appendAssistantNote(
+          "Rovik lost desktop speech recognition. Tap the mic again after checking your connection and Google voice configuration.",
+          "alert",
+        );
+      }
       goIdle(); // real error → back to standby
     };
 
@@ -740,7 +832,26 @@ export function EveConsole() {
       wakeActiveRef.current = false;
       wakeLastEventRef.current = Date.now();
       if (done || voiceStateRef.current !== "standby") return;
-      if (e.error === "not-allowed") { setVoiceSynced("off"); wakeRecRef.current = null; return; }
+      if (e.error === "not-allowed") {
+        appendAssistantNote(
+          "Rovik needs microphone access before wake word listening can run. Check Windows microphone permissions, then reopen the desktop app.",
+          "alert",
+        );
+        setVoiceSynced("off");
+        wakeRecRef.current = null;
+        return;
+      }
+      if (e.error === "audio-capture") {
+        appendAssistantNote(
+          "Rovik couldn't start wake word listening because Windows isn't exposing a working microphone.",
+          "alert",
+        );
+      } else if (e.error === "network" || e.error === "service-not-allowed") {
+        appendAssistantNote(
+          "Rovik's desktop speech service is unavailable right now. I'll keep Eve available by text while the mic reconnects.",
+          "alert",
+        );
+      }
       if (wakeRecRef.current !== rec) return; // watchdog already replaced us
       wakeRecRef.current = null;
       restarted = true;
@@ -788,7 +899,11 @@ export function EveConsole() {
     if (voiceStateRef.current === "listening") {
       goIdle();
     } else {
-      startListening("", 8000);
+      void (async () => {
+        const ready = await ensureMicrophoneReady();
+        if (!ready) return;
+        startListening("", 8000);
+      })();
     }
   }
 

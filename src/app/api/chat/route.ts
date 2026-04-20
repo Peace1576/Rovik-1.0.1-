@@ -15,7 +15,7 @@ import { resolveDirectActionIntent } from "@/lib/direct-action-intents";
 import { eveSystemPrompt } from "@/lib/eve-system-prompt";
 import { ClientAction, EVE_FUNCTION_DECLARATIONS } from "@/lib/eve-tools";
 import { executeTool } from "@/lib/tool-executor";
-import { createClient } from "@/lib/supabase/server";
+import { createOptionalClient } from "@/lib/supabase/server";
 
 type ChatRole = "user" | "assistant";
 type ChatMessage = { role: ChatRole; content: string };
@@ -118,8 +118,11 @@ export async function POST(request: NextRequest) {
     }
 
     // Get user session (anonymous users still work, just without memory/integrations)
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const supabase = await createOptionalClient();
+    const authResult = supabase
+      ? await supabase.auth.getUser()
+      : { data: { user: null } };
+    const { data: { user } } = authResult;
     const userId = user?.id ?? "anonymous";
 
     let body: { messages?: unknown; state?: unknown };
@@ -146,7 +149,7 @@ export async function POST(request: NextRequest) {
         directIntent.toolName,
         directIntent.args,
         userId,
-        supabase,
+        supabase as never,
       );
 
       return jsonNoStore({
@@ -191,7 +194,7 @@ export async function POST(request: NextRequest) {
         toolName,
         toolArgs,
         userId,
-        supabase,
+        supabase as never,
       );
 
       const actions = clientAction ? [clientAction] : [];
@@ -241,7 +244,7 @@ export async function POST(request: NextRequest) {
         toolName,
         toolArgs,
         userId,
-        supabase,
+        supabase as never,
       );
 
       const actions = clientAction ? [clientAction] : [];
@@ -346,7 +349,7 @@ export async function POST(request: NextRequest) {
           fc.name ?? "",
           (fc.args as Record<string, unknown>) ?? {},
           userId,
-          supabase
+          supabase as never
         );
 
         if (clientAction) actions.push(clientAction);

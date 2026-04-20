@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
 import {
   FormEvent,
   startTransition,
@@ -14,7 +15,7 @@ import { EveAvatar } from "@/components/eve-avatar";
 import type { ConversationState } from "@/lib/conversation-state";
 import { desktopCapabilityCards } from "@/lib/desktop-capabilities";
 import type { ClientAction } from "@/lib/eve-tools";
-import { createClient } from "@/lib/supabase/client";
+import { createOptionalClient } from "@/lib/supabase/client";
 
 type Presence = "ready" | "thinking" | "speaking" | "error";
 type Mood = "warm" | "curious" | "focused" | "alert";
@@ -237,13 +238,21 @@ export function EveConsole() {
 
   // Auth state
   useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      setUserEmail(user?.email ?? null);
-    });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUserEmail(session?.user?.email ?? null);
-    });
+    const supabase = createOptionalClient();
+    if (!supabase) {
+      setUserEmail(null);
+      return;
+    }
+
+    void (async () => {
+      const result = await supabase.auth.getUser();
+      setUserEmail(result.data.user?.email ?? null);
+    })();
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (_event: AuthChangeEvent, session: Session | null) => {
+        setUserEmail(session?.user?.email ?? null);
+      },
+    );
     return () => subscription.unsubscribe();
   }, []);
 
@@ -1094,7 +1103,12 @@ export function EveConsole() {
               <button
                 type="button"
                 onClick={async () => {
-                  const supabase = createClient();
+                  const supabase = createOptionalClient();
+                  if (!supabase) {
+                    setUserEmail(null);
+                    return;
+                  }
+
                   await supabase.auth.signOut();
                   setUserEmail(null);
                 }}

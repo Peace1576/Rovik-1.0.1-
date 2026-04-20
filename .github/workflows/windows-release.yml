@@ -19,6 +19,9 @@ jobs:
   build-sign-and-release:
     runs-on: windows-latest
     environment: windows-signing
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
 
     steps:
       - name: Check out repository
@@ -36,6 +39,8 @@ jobs:
             "AZURE_TRUSTED_SIGNING_ENDPOINT" = "${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}"
             "AZURE_TRUSTED_SIGNING_ACCOUNT_NAME" = "${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}"
             "AZURE_TRUSTED_SIGNING_PROFILE_NAME" = "${{ vars.AZURE_TRUSTED_SIGNING_PROFILE_NAME }}"
+            "NEXT_PUBLIC_SUPABASE_URL" = "${{ vars.NEXT_PUBLIC_SUPABASE_URL }}"
+            "NEXT_PUBLIC_SUPABASE_ANON_KEY" = "${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}"
           }
 
           $missing = @(

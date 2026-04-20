@@ -5,9 +5,11 @@ import Link from "next/link";
 
 import { LegalLinks } from "@/components/legal-links";
 import { LEGAL_VERSION } from "@/lib/legal";
-import { createClient } from "@/lib/supabase/client";
+import { createOptionalClient } from "@/lib/supabase/client";
 
 export default function SignupPage() {
+  const supabase = createOptionalClient();
+  const authUnavailable = !supabase;
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -40,7 +42,14 @@ export default function SignupPage() {
     }
 
     setLoading(true);
-    const supabase = createClient();
+    if (!supabase) {
+      setError(
+        "Account creation is unavailable in this desktop build right now. Download the latest installer or use the web app.",
+      );
+      setLoading(false);
+      return;
+    }
+
     const acceptedAt = new Date().toISOString();
     const { error } = await supabase.auth.signUp({
       email,
@@ -159,6 +168,12 @@ export default function SignupPage() {
               </p>
             )}
 
+            {authUnavailable && !error && (
+              <p className="rounded-[1rem] border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-700">
+                Account creation is not configured in this build yet. Use the latest desktop release or the web app.
+              </p>
+            )}
+
             <label className="flex items-start gap-3 rounded-[1.2rem] border border-white/60 bg-white/74 px-4 py-3 text-sm leading-6 text-[#22344d]">
               <input
                 type="checkbox"
@@ -207,7 +222,7 @@ export default function SignupPage() {
 
             <button
               type="submit"
-              disabled={loading || !acceptedLegal || !acceptedAiRisk}
+              disabled={loading || !acceptedLegal || !acceptedAiRisk || authUnavailable}
               className="mt-2 rounded-[1.4rem] bg-[linear-gradient(135deg,#0b74ff_0%,#30c2ff_100%)] px-4 py-3 text-sm font-semibold text-white shadow-[0_18px_40px_rgba(19,112,255,0.3)] transition hover:-translate-y-0.5 disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {loading ? "Creating account..." : "Create account"}

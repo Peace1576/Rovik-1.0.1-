@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
+import { createOptionalClient } from "@/lib/supabase/client";
 
 type Integration = { service: string; connected_at: string; fields: string[] };
 
@@ -160,7 +160,8 @@ const SECTIONS = ["Web & Research", "Communication", "Media & Creation", "Smart 
 function SettingsInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const supabase = createClient();
+  const supabase = createOptionalClient();
+  const authUnavailable = !supabase;
 
   const [userEmail, setUserEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -182,6 +183,11 @@ function SettingsInner() {
   }, []);
 
   useEffect(() => {
+    if (!supabase) {
+      setLoading(false);
+      return;
+    }
+
     async function init() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { router.push("/auth/login"); return; }
@@ -193,6 +199,41 @@ function SettingsInner() {
     void init();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  if (authUnavailable) {
+    return (
+      <main className="min-h-screen px-4 pb-12 pt-5 sm:px-6 lg:px-8">
+        <div className="mx-auto w-full max-w-3xl">
+          <section className="glass-panel rounded-[2rem] px-6 py-8 text-center">
+            <p className="font-mono text-[0.68rem] uppercase tracking-[0.3em] text-[#63758e]">
+              Rovik / Settings
+            </p>
+            <h1 className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-[#09101d]">
+              Account features are unavailable in this build
+            </h1>
+            <p className="mt-4 text-sm leading-7 text-[#5c718d]">
+              This desktop build was launched without the public account configuration it needs for sign-in, synced settings, and integrations.
+              Download the latest installer or use the web app while this build is being replaced.
+            </p>
+            <div className="mt-6 flex items-center justify-center gap-3">
+              <Link
+                href="/"
+                className="rounded-full border border-white/65 bg-white/65 px-4 py-2 text-sm text-[#47627f] transition hover:bg-white"
+              >
+                Back to Eve
+              </Link>
+              <Link
+                href="/download"
+                className="rounded-full bg-[linear-gradient(135deg,#0b74ff_0%,#30c2ff_100%)] px-4 py-2 text-sm font-semibold text-white shadow-[0_12px_28px_rgba(19,112,255,0.22)] transition hover:-translate-y-0.5"
+              >
+                Get latest desktop build
+              </Link>
+            </div>
+          </section>
+        </div>
+      </main>
+    );
+  }
 
   function isConnected(serviceId: string) {
     return integrations.some((i) => i.service === serviceId);

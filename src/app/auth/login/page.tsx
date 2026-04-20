@@ -5,12 +5,14 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { LegalLinks } from "@/components/legal-links";
-import { createClient } from "@/lib/supabase/client";
+import { createOptionalClient } from "@/lib/supabase/client";
 
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const next = searchParams.get("next") ?? "/";
+  const supabase = createOptionalClient();
+  const authUnavailable = !supabase;
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -22,7 +24,14 @@ function LoginForm() {
     setError("");
     setLoading(true);
 
-    const supabase = createClient();
+    if (!supabase) {
+      setError(
+        "Sign-in is unavailable in this desktop build right now. Download the latest installer or use the web app.",
+      );
+      setLoading(false);
+      return;
+    }
+
     const { error } = await supabase.auth.signInWithPassword({ email, password });
 
     if (error) {
@@ -71,9 +80,15 @@ function LoginForm() {
           </p>
         )}
 
+        {authUnavailable && !error && (
+          <p className="rounded-[1rem] border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-700">
+            Account sign-in is not configured in this build yet. Use the latest desktop release or the web app.
+          </p>
+        )}
+
         <button
           type="submit"
-          disabled={loading}
+          disabled={loading || authUnavailable}
           className="mt-2 rounded-[1.4rem] bg-[linear-gradient(135deg,#0b74ff_0%,#30c2ff_100%)] px-4 py-3 text-sm font-semibold text-white shadow-[0_18px_40px_rgba(19,112,255,0.3)] transition hover:-translate-y-0.5 disabled:opacity-60 disabled:cursor-not-allowed"
         >
           {loading ? "Signing in..." : "Sign in"}

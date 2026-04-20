@@ -1,11 +1,17 @@
 import { createServerClient } from "@supabase/ssr";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 
-export async function createClient() {
+import { getSupabasePublicConfig } from "@/lib/supabase/config";
+
+export async function createOptionalClient(): Promise<SupabaseClient | null> {
+  const config = getSupabasePublicConfig();
+  if (!config) return null;
+
   const cookieStore = await cookies();
   return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    config.url,
+    config.anonKey,
     {
       cookies: {
         getAll() {
@@ -23,4 +29,15 @@ export async function createClient() {
       },
     }
   );
+}
+
+export async function createClient() {
+  const client = await createOptionalClient();
+  if (!client) {
+    throw new Error(
+      "Supabase public config is missing. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY for account features.",
+    );
+  }
+
+  return client;
 }

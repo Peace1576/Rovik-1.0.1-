@@ -18,6 +18,7 @@ permissions:
 jobs:
   build-sign-and-release:
     runs-on: windows-latest
+    environment: windows-signing
 
     steps:
       - name: Check out repository

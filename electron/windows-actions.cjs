@@ -48,6 +48,10 @@ const KNOWN_FOLDERS = new Map([
 
 const SYSTEM_ACTIONS = {
   open_settings: { kind: "protocol", target: "ms-settings:" },
+  open_microphone_privacy_settings: {
+    kind: "protocol",
+    target: "ms-settings:privacy-microphone",
+  },
   open_wifi_settings: { kind: "protocol", target: "ms-settings:network-wifi" },
   open_bluetooth_settings: { kind: "protocol", target: "ms-settings:bluetooth" },
   open_display_settings: { kind: "protocol", target: "ms-settings:display" },

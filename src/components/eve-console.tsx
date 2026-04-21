@@ -26,6 +26,18 @@ type DesktopRuntime = {
   appVersion: string;
 };
 
+type MicNoticeKind =
+  | "permission"
+  | "device"
+  | "speech-service"
+  | "microphone-error";
+
+type MicNotice = {
+  kind: MicNoticeKind;
+  title: string;
+  message: string;
+};
+
 type Message = {
   id: string;
   role: "user" | "assistant";
@@ -193,6 +205,8 @@ export function EveConsole() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [generatedImage, setGeneratedImage] = useState<{ url: string; prompt: string } | null>(null);
   const [activeVideo, setActiveVideo] = useState<ActiveVideo | null>(null);
+  const [micNotice, setMicNotice] = useState<MicNotice | null>(null);
+  const [micActionBusy, setMicActionBusy] = useState<"request" | "privacy" | "sound" | null>(null);
   const [desktopTranscriptOpen, setDesktopTranscriptOpen] = useState(false);
   // When Chrome blocks window.open (async context), store url here so user can tap it
   const [pendingUrl, setPendingUrl] = useState<{ url: string; label: string } | null>(null);
@@ -286,7 +300,7 @@ export function EveConsole() {
     if (!desktopRuntime?.isDesktop) return;
 
     void (async () => {
-      const ready = await ensureMicrophoneReady(true);
+      const ready = await ensureMicrophoneReady();
       if (!ready || voiceStateRef.current === "listening") return;
       stopListening();
       setVoiceSynced("standby");
@@ -535,6 +549,26 @@ export function EveConsole() {
     setVoiceState(state);
   }
 
+  function clearMicNotice() {
+    setMicNotice(null);
+  }
+
+  function raiseMicNotice(notice: MicNotice) {
+    setMicNotice(notice);
+    setStatus("error");
+    setMood("alert");
+    setLiveExcerpt(notice.message);
+  }
+
+  function showMissingSpeechRecognitionNotice() {
+    raiseMicNotice({
+      kind: "speech-service",
+      title: "Voice engine unavailable",
+      message:
+        "Rovik can use text right now, but desktop voice recognition is unavailable. Retry the microphone or reopen the desktop app after checking your connection.",
+    });
+  }
+
   async function ensureMicrophoneReady(quiet = false) {
     if (micReadyRef.current) return true;
     if (typeof window === "undefined") return false;
@@ -552,6 +586,7 @@ export function EveConsole() {
       .then((stream) => {
         stream.getTracks().forEach((track) => track.stop());
         micReadyRef.current = true;
+        clearMicNotice();
         return true;
       })
       .catch((error: unknown) => {
@@ -568,20 +603,25 @@ export function EveConsole() {
             name === "NotAllowedError" ||
             name === "PermissionDeniedError"
           ) {
-            appendAssistantNote(
-              "Rovik needs microphone access in the desktop app. Check Windows microphone permissions, then try the mic again.",
-              "alert",
-            );
+            raiseMicNotice({
+              kind: "permission",
+              title: "Microphone access required",
+              message:
+                "Rovik needs microphone access before wake word and voice input can run. Turn on Windows microphone access for desktop apps, then click Retry microphone.",
+            });
           } else if (name === "NotFoundError") {
-            appendAssistantNote(
-              "Rovik couldn't find a working microphone on this device. Check the Windows input device and try again.",
-              "alert",
-            );
+            raiseMicNotice({
+              kind: "device",
+              title: "No microphone found",
+              message:
+                "Rovik could not find a working microphone on this device. Check the Windows input device, then click Retry microphone.",
+            });
           } else {
-            appendAssistantNote(
-              `Rovik couldn't start the microphone (${name}). Check the Windows input device and try again.`,
-              "alert",
-            );
+            raiseMicNotice({
+              kind: "microphone-error",
+              title: "Microphone startup failed",
+              message: `Rovik could not start the microphone (${name}). Check the Windows input device, then click Retry microphone.`,
+            });
           }
         }
 
@@ -659,7 +699,11 @@ export function EveConsole() {
 
   function startListening(seedText: string, initialWindowMs: number) {
     const SR = getSR();
-    if (!SR || voiceStateRef.current === "off") return;
+    if (!SR) {
+      showMissingSpeechRecognitionNotice();
+      return;
+    }
+    if (voiceStateRef.current === "off") return;
 
     // Stop wake word before starting active rec (Chrome: one SR at a time)
     const oldWake = wakeRecRef.current;
@@ -743,15 +787,19 @@ export function EveConsole() {
       if (sessionIdRef.current !== sid) return;
       if (e.error === "aborted" || e.error === "no-speech") return; // onend handles
       if (e.error === "audio-capture") {
-        appendAssistantNote(
-          "Rovik couldn't hear a working microphone. Check the Windows input device, then try again.",
-          "alert",
-        );
+        raiseMicNotice({
+          kind: "device",
+          title: "No microphone input detected",
+          message:
+            "Rovik could not hear a working microphone. Check the Windows input device, then click Retry microphone.",
+        });
       } else if (e.error === "network" || e.error === "service-not-allowed") {
-        appendAssistantNote(
-          "Rovik lost desktop speech recognition. Tap the mic again after checking your connection and Google voice configuration.",
-          "alert",
-        );
+        raiseMicNotice({
+          kind: "speech-service",
+          title: "Voice service unavailable",
+          message:
+            "Rovik lost desktop speech recognition. Retry the microphone after checking your connection and voice service settings.",
+        });
       }
       goIdle(); // real error → back to standby
     };
@@ -776,7 +824,11 @@ export function EveConsole() {
 
   function startWakeWordListener() {
     const SR = getSR();
-    if (!SR || voiceStateRef.current === "off") return;
+    if (!SR) {
+      showMissingSpeechRecognitionNotice();
+      return;
+    }
+    if (voiceStateRef.current === "off") return;
 
     // Clear any existing instance first
     const oldRec = wakeRecRef.current;
@@ -833,24 +885,30 @@ export function EveConsole() {
       wakeLastEventRef.current = Date.now();
       if (done || voiceStateRef.current !== "standby") return;
       if (e.error === "not-allowed") {
-        appendAssistantNote(
-          "Rovik needs microphone access before wake word listening can run. Check Windows microphone permissions, then reopen the desktop app.",
-          "alert",
-        );
+        raiseMicNotice({
+          kind: "permission",
+          title: "Wake word needs microphone access",
+          message:
+            "Rovik cannot listen for 'Eve' until Windows allows microphone access for desktop apps. Open microphone settings, turn access on, then click Retry microphone.",
+        });
         setVoiceSynced("off");
         wakeRecRef.current = null;
         return;
       }
       if (e.error === "audio-capture") {
-        appendAssistantNote(
-          "Rovik couldn't start wake word listening because Windows isn't exposing a working microphone.",
-          "alert",
-        );
+        raiseMicNotice({
+          kind: "device",
+          title: "Wake word microphone unavailable",
+          message:
+            "Rovik could not start wake word listening because Windows is not exposing a working microphone. Check input settings, then click Retry microphone.",
+        });
       } else if (e.error === "network" || e.error === "service-not-allowed") {
-        appendAssistantNote(
-          "Rovik's desktop speech service is unavailable right now. I'll keep Eve available by text while the mic reconnects.",
-          "alert",
-        );
+        raiseMicNotice({
+          kind: "speech-service",
+          title: "Wake word service unavailable",
+          message:
+            "Rovik's desktop speech service is unavailable right now. You can still use text while the microphone reconnects.",
+        });
       }
       if (wakeRecRef.current !== rec) return; // watchdog already replaced us
       wakeRecRef.current = null;
@@ -882,8 +940,7 @@ export function EveConsole() {
   // Toggle wake word on/off via the header button
   function toggleVoiceStandby() {
     if (voiceStateRef.current === "off") {
-      setVoiceSynced("standby");
-      startWakeWordListener();
+      void retryMicrophoneAccess();
     } else {
       stopListening();
       const old = wakeRecRef.current;
@@ -952,6 +1009,48 @@ export function EveConsole() {
         error instanceof Error ? error.message : "Unknown desktop action error.";
       appendAssistantNote(`${label} failed: ${message}`);
       return false;
+    }
+  }
+
+  async function openDesktopMicrophonePrivacySettings() {
+    setMicActionBusy("privacy");
+    try {
+      await runDesktopAction("Open microphone privacy settings", (bridge) =>
+        bridge.runSystemAction("open_microphone_privacy_settings"),
+      );
+    } finally {
+      setMicActionBusy(null);
+    }
+  }
+
+  async function openDesktopSoundSettings() {
+    setMicActionBusy("sound");
+    try {
+      await runDesktopAction("Open sound settings", (bridge) =>
+        bridge.runSystemAction("open_sound_settings"),
+      );
+    } finally {
+      setMicActionBusy(null);
+    }
+  }
+
+  async function retryMicrophoneAccess() {
+    setMicActionBusy("request");
+    try {
+      const ready = await ensureMicrophoneReady();
+      if (!ready) return;
+
+      stopListening();
+      clearMicNotice();
+      setStatus("ready");
+      setMood("warm");
+      setLiveExcerpt(
+        "Microphone connected. Say 'Eve' or tap the mic when you want Rovik to listen.",
+      );
+      setVoiceSynced("standby");
+      window.setTimeout(startWakeWordListener, 150);
+    } finally {
+      setMicActionBusy(null);
     }
   }
 
@@ -1169,13 +1268,65 @@ export function EveConsole() {
 
   const isDesktopShell = !!desktopRuntime?.isDesktop;
   const statusLabel =
-    status === "thinking"
+    micNotice
+      ? micNotice.title
+      : status === "thinking"
       ? "Processing the next move..."
       : status === "speaking"
         ? "Speaking live..."
         : status === "error"
           ? "Needs attention"
           : "Standing by";
+
+  const desktopMicNoticePanel =
+    isDesktopShell && micNotice ? (
+      <section className="glass-panel w-full max-w-4xl rounded-[1.8rem] border border-amber-300/70 bg-[linear-gradient(180deg,rgba(255,251,235,0.96),rgba(255,255,255,0.92))] px-5 py-4 shadow-[0_18px_40px_rgba(180,120,0,0.12)]">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <p className="font-mono text-[0.68rem] uppercase tracking-[0.3em] text-[#8a6200]">
+              Microphone access
+            </p>
+            <h3 className="mt-1 text-lg font-semibold tracking-[-0.04em] text-[#3f2b00]">
+              {micNotice.title}
+            </h3>
+            <p className="mt-2 max-w-2xl text-sm leading-7 text-[#6e5624]">
+              {micNotice.message}
+            </p>
+            {micNotice.kind === "permission" && (
+              <p className="mt-2 text-xs leading-6 text-[#8b6a2e]">
+                Turn on <span className="font-semibold">Desktop app microphone access</span> in Windows, then come back and click Retry microphone.
+              </p>
+            )}
+          </div>
+          <div className="flex shrink-0 flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => void retryMicrophoneAccess()}
+              disabled={micActionBusy !== null}
+              className="rounded-full bg-[linear-gradient(135deg,#0b74ff_0%,#30c2ff_100%)] px-4 py-2 text-sm font-semibold text-white shadow-[0_14px_30px_rgba(19,112,255,0.22)] transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {micActionBusy === "request" ? "Checking microphone..." : "Retry microphone"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void openDesktopMicrophonePrivacySettings()}
+              disabled={micActionBusy !== null}
+              className="rounded-full border border-[#0b74ff]/20 bg-white/85 px-4 py-2 text-sm font-semibold text-[#0b74ff] transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {micActionBusy === "privacy" ? "Opening settings..." : "Open microphone settings"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void openDesktopSoundSettings()}
+              disabled={micActionBusy !== null}
+              className="rounded-full border border-white/70 bg-white/80 px-4 py-2 text-sm font-semibold text-[#24344b] transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {micActionBusy === "sound" ? "Opening sound..." : "Open sound input"}
+            </button>
+          </div>
+        </div>
+      </section>
+    ) : null;
 
   const transcriptPanel = (
     <section className="glass-panel rounded-[2rem] px-4 py-4 sm:px-5">
@@ -1462,6 +1613,8 @@ export function EveConsole() {
                   Listening for &quot;Eve&quot;...
                 </p>
               )}
+
+              {desktopMicNoticePanel}
 
               <div className="flex flex-wrap justify-center gap-3">
                 {quickPrompts.map((quickPrompt) => (

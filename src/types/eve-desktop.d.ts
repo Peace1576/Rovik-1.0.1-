@@ -21,6 +21,7 @@ declare global {
       runSystemAction: (
         action:
           | "open_settings"
+          | "open_microphone_privacy_settings"
           | "open_wifi_settings"
           | "open_bluetooth_settings"
           | "open_display_settings"

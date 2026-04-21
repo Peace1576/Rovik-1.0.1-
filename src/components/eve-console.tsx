@@ -38,6 +38,15 @@ type MicNotice = {
   message: string;
 };
 
+type MicDiagnostics = {
+  deviceLabel: string | null;
+  level: number;
+  lastEvent: string;
+  lastError: string | null;
+  testState: "idle" | "testing" | "pass" | "no-signal";
+  serviceReady: boolean;
+};
+
 type Message = {
   id: string;
   role: "user" | "assistant";
@@ -206,7 +215,17 @@ export function EveConsole() {
   const [generatedImage, setGeneratedImage] = useState<{ url: string; prompt: string } | null>(null);
   const [activeVideo, setActiveVideo] = useState<ActiveVideo | null>(null);
   const [micNotice, setMicNotice] = useState<MicNotice | null>(null);
-  const [micActionBusy, setMicActionBusy] = useState<"request" | "privacy" | "sound" | null>(null);
+  const [micActionBusy, setMicActionBusy] = useState<
+    "request" | "privacy" | "sound" | "test" | null
+  >(null);
+  const [micDiagnostics, setMicDiagnostics] = useState<MicDiagnostics>({
+    deviceLabel: null,
+    level: 0,
+    lastEvent: "Waiting for microphone",
+    lastError: null,
+    testState: "idle",
+    serviceReady: false,
+  });
   const [desktopTranscriptOpen, setDesktopTranscriptOpen] = useState(false);
   // When Chrome blocks window.open (async context), store url here so user can tap it
   const [pendingUrl, setPendingUrl] = useState<{ url: string; label: string } | null>(null);
@@ -236,6 +255,7 @@ export function EveConsole() {
   const externalWindowRef = useRef<Window | null>(null);
   const micReadyRef = useRef(false);
   const micInitPromiseRef = useRef<Promise<boolean> | null>(null);
+  const micTestCleanupRef = useRef<(() => void) | null>(null);
 
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
   const transcriptBoxRef = useRef<HTMLDivElement | null>(null);
@@ -311,7 +331,9 @@ export function EveConsole() {
 
   // Auto-start wake word listener on mount
   useEffect(() => {
-    startWakeWordListener();
+    if (!window.eveDesktop) {
+      startWakeWordListener();
+    }
     return () => {
       if (typeof window !== "undefined" && "speechSynthesis" in window) {
         window.speechSynthesis.cancel();
@@ -323,6 +345,7 @@ export function EveConsole() {
       if (postReplyTimerRef.current) window.clearTimeout(postReplyTimerRef.current);
       try { wakeRecRef.current?.stop(); } catch { /* ignore */ }
       try { activeRecRef.current?.stop(); } catch { /* ignore */ }
+      try { micTestCleanupRef.current?.(); } catch { /* ignore */ }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -560,7 +583,20 @@ export function EveConsole() {
     setLiveExcerpt(notice.message);
   }
 
+  function updateMicDiagnostics(
+    patch: Partial<MicDiagnostics> | ((current: MicDiagnostics) => MicDiagnostics),
+  ) {
+    setMicDiagnostics((current) =>
+      typeof patch === "function" ? patch(current) : { ...current, ...patch },
+    );
+  }
+
   function showMissingSpeechRecognitionNotice() {
+    updateMicDiagnostics({
+      serviceReady: false,
+      lastEvent: "Speech recognition unavailable",
+      lastError: "SpeechRecognitionMissing",
+    });
     raiseMicNotice({
       kind: "speech-service",
       title: "Voice engine unavailable",
@@ -584,9 +620,16 @@ export function EveConsole() {
 
     micInitPromiseRef.current = getUserMedia({ audio: true })
       .then((stream) => {
+        const [track] = stream.getAudioTracks();
+        const label = track?.label?.trim() || "Default system microphone";
         stream.getTracks().forEach((track) => track.stop());
         micReadyRef.current = true;
         clearMicNotice();
+        updateMicDiagnostics({
+          deviceLabel: label,
+          lastEvent: "Microphone ready",
+          lastError: null,
+        });
         return true;
       })
       .catch((error: unknown) => {
@@ -631,6 +674,12 @@ export function EveConsole() {
         ) {
           setVoiceSynced("off");
         }
+
+        updateMicDiagnostics({
+          serviceReady: false,
+          lastError: name,
+          lastEvent: "Microphone access failed",
+        });
 
         return false;
       })
@@ -763,6 +812,11 @@ export function EveConsole() {
       const now = Date.now();
       lastSpeechRef.current = now;  // reset clock from when mic is truly live
       listenStartRef.current = now;
+      updateMicDiagnostics({
+        serviceReady: true,
+        lastError: null,
+        lastEvent: "Listening for speech",
+      });
       playChime(); // 🔔 ring when mic goes live
     };
 
@@ -787,6 +841,11 @@ export function EveConsole() {
       if (sessionIdRef.current !== sid) return;
       if (e.error === "aborted" || e.error === "no-speech") return; // onend handles
       if (e.error === "audio-capture") {
+        updateMicDiagnostics({
+          serviceReady: false,
+          lastError: e.error,
+          lastEvent: "Active listening could not capture audio",
+        });
         raiseMicNotice({
           kind: "device",
           title: "No microphone input detected",
@@ -794,6 +853,11 @@ export function EveConsole() {
             "Rovik could not hear a working microphone. Check the Windows input device, then click Retry microphone.",
         });
       } else if (e.error === "network" || e.error === "service-not-allowed") {
+        updateMicDiagnostics({
+          serviceReady: false,
+          lastError: e.error,
+          lastEvent: "Desktop speech service unavailable",
+        });
         raiseMicNotice({
           kind: "speech-service",
           title: "Voice service unavailable",
@@ -824,7 +888,7 @@ export function EveConsole() {
 
   function startWakeWordListener() {
     const SR = getSR();
-    if (!SR) {
+      if (!SR) {
       showMissingSpeechRecognitionNotice();
       return;
     }
@@ -849,6 +913,11 @@ export function EveConsole() {
     rec.onstart = () => {
       wakeActiveRef.current = true;
       wakeLastEventRef.current = Date.now();
+      updateMicDiagnostics({
+        serviceReady: true,
+        lastError: null,
+        lastEvent: "Wake word listener armed",
+      });
     };
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -885,6 +954,11 @@ export function EveConsole() {
       wakeLastEventRef.current = Date.now();
       if (done || voiceStateRef.current !== "standby") return;
       if (e.error === "not-allowed") {
+        updateMicDiagnostics({
+          serviceReady: false,
+          lastError: e.error,
+          lastEvent: "Wake word blocked by permission",
+        });
         raiseMicNotice({
           kind: "permission",
           title: "Wake word needs microphone access",
@@ -896,6 +970,11 @@ export function EveConsole() {
         return;
       }
       if (e.error === "audio-capture") {
+        updateMicDiagnostics({
+          serviceReady: false,
+          lastError: e.error,
+          lastEvent: "Wake word listener lost microphone",
+        });
         raiseMicNotice({
           kind: "device",
           title: "Wake word microphone unavailable",
@@ -903,6 +982,11 @@ export function EveConsole() {
             "Rovik could not start wake word listening because Windows is not exposing a working microphone. Check input settings, then click Retry microphone.",
         });
       } else if (e.error === "network" || e.error === "service-not-allowed") {
+        updateMicDiagnostics({
+          serviceReady: false,
+          lastError: e.error,
+          lastEvent: "Wake word speech service unavailable",
+        });
         raiseMicNotice({
           kind: "speech-service",
           title: "Wake word service unavailable",
@@ -919,6 +1003,13 @@ export function EveConsole() {
     rec.onend = () => {
       wakeActiveRef.current = false;
       wakeLastEventRef.current = Date.now();
+      updateMicDiagnostics((current) => ({
+        ...current,
+        lastEvent:
+          voiceStateRef.current === "standby" && !done
+            ? "Wake word listener restarting"
+            : current.lastEvent,
+      }));
       // Only self-restart if nothing else already did.
       // 200 ms gives Chrome time to fully release the mic before the next start().
       if (voiceStateRef.current === "standby" && !done && !restarted && wakeRecRef.current === rec) {
@@ -1047,8 +1138,144 @@ export function EveConsole() {
       setLiveExcerpt(
         "Microphone connected. Say 'Eve' or tap the mic when you want Rovik to listen.",
       );
+      updateMicDiagnostics({
+        lastEvent: "Retry completed",
+        lastError: null,
+      });
       setVoiceSynced("standby");
       window.setTimeout(startWakeWordListener, 150);
+    } finally {
+      setMicActionBusy(null);
+    }
+  }
+
+  async function runMicrophoneSelfTest() {
+    if (typeof window === "undefined") return;
+    const getUserMedia = navigator.mediaDevices?.getUserMedia?.bind(
+      navigator.mediaDevices,
+    );
+    if (!getUserMedia) {
+      showMissingSpeechRecognitionNotice();
+      return;
+    }
+
+    setMicActionBusy("test");
+    micTestCleanupRef.current?.();
+    updateMicDiagnostics({
+      testState: "testing",
+      level: 0,
+      lastEvent: "Testing microphone input",
+      lastError: null,
+    });
+
+    try {
+      const stream = await getUserMedia({ audio: true });
+      const [track] = stream.getAudioTracks();
+      const label = track?.label?.trim() || "Default system microphone";
+      const AudioCtx =
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ((window as any).AudioContext ??
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (window as any).webkitAudioContext) as typeof AudioContext | undefined;
+
+      if (!AudioCtx) {
+        stream.getTracks().forEach((currentTrack) => currentTrack.stop());
+        updateMicDiagnostics({
+          deviceLabel: label,
+          testState: "idle",
+          lastEvent: "Microphone test unavailable on this device",
+          lastError: "AudioContextMissing",
+        });
+        return;
+      }
+
+      const ctx = new AudioCtx();
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 2048;
+      source.connect(analyser);
+      const data = new Uint8Array(analyser.fftSize);
+      let peak = 0;
+
+      const finish = async (result: "pass" | "no-signal") => {
+        micTestCleanupRef.current = null;
+        stream.getTracks().forEach((currentTrack) => currentTrack.stop());
+        try {
+          await ctx.close();
+        } catch {
+          /* ignore */
+        }
+
+        updateMicDiagnostics({
+          deviceLabel: label,
+          testState: result,
+          level: peak,
+          lastEvent:
+            result === "pass"
+              ? "Microphone test detected audio"
+              : "Microphone test heard no usable signal",
+          lastError: result === "pass" ? null : "NoSignalDetected",
+        });
+
+        if (result === "no-signal") {
+          raiseMicNotice({
+            kind: "device",
+            title: "Microphone hears no signal",
+            message:
+              "Rovik can open the microphone, but it is not seeing usable audio from the current default input. Set the correct Windows default microphone, then retry the microphone.",
+          });
+        } else {
+          clearMicNotice();
+          setStatus("ready");
+          setMood("warm");
+          setLiveExcerpt(
+            `Microphone test passed on ${label}. Say "Eve" again or tap the mic to talk.`,
+          );
+        }
+      };
+
+      const sample = () => {
+        analyser.getByteTimeDomainData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) {
+          const normalized = (data[i] - 128) / 128;
+          sum += normalized * normalized;
+        }
+        const rms = Math.sqrt(sum / data.length);
+        peak = Math.max(peak, rms);
+        updateMicDiagnostics((current) => ({
+          ...current,
+          deviceLabel: label,
+          level: Math.max(current.level * 0.72, rms),
+        }));
+      };
+
+      const interval = window.setInterval(sample, 90);
+      const timeout = window.setTimeout(() => {
+        window.clearInterval(interval);
+        void finish(peak > 0.04 ? "pass" : "no-signal");
+      }, 3200);
+
+      micTestCleanupRef.current = () => {
+        window.clearInterval(interval);
+        window.clearTimeout(timeout);
+        stream.getTracks().forEach((currentTrack) => currentTrack.stop());
+        void ctx.close().catch(() => undefined);
+      };
+    } catch (error) {
+      const name =
+        typeof error === "object" &&
+        error &&
+        "name" in error &&
+        typeof error.name === "string"
+          ? error.name
+          : "MicrophoneTestError";
+      updateMicDiagnostics({
+        testState: "idle",
+        lastEvent: "Microphone test failed",
+        lastError: name,
+      });
+      await ensureMicrophoneReady();
     } finally {
       setMicActionBusy(null);
     }
@@ -1309,6 +1536,16 @@ export function EveConsole() {
             </button>
             <button
               type="button"
+              onClick={() => void runMicrophoneSelfTest()}
+              disabled={micActionBusy !== null}
+              className="rounded-full border border-[#0b74ff]/20 bg-white/85 px-4 py-2 text-sm font-semibold text-[#0b74ff] transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {micActionBusy === "test" || micDiagnostics.testState === "testing"
+                ? "Testing mic..."
+                : "Test microphone"}
+            </button>
+            <button
+              type="button"
               onClick={() => void openDesktopMicrophonePrivacySettings()}
               disabled={micActionBusy !== null}
               className="rounded-full border border-[#0b74ff]/20 bg-white/85 px-4 py-2 text-sm font-semibold text-[#0b74ff] transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
@@ -1323,6 +1560,48 @@ export function EveConsole() {
             >
               {micActionBusy === "sound" ? "Opening sound..." : "Open sound input"}
             </button>
+          </div>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-[1.3fr_0.7fr]">
+          <div className="rounded-[1.4rem] border border-white/70 bg-white/72 px-4 py-3">
+            <p className="font-mono text-[0.62rem] uppercase tracking-[0.22em] text-[#8a6200]">
+              Current microphone
+            </p>
+            <p className="mt-2 text-sm font-semibold text-[#3f2b00]">
+              {micDiagnostics.deviceLabel ?? "Waiting for Windows default input"}
+            </p>
+            <p className="mt-2 text-xs leading-6 text-[#7a6332]">
+              Wake listener: {micDiagnostics.serviceReady ? "armed" : "not ready"}
+              {micDiagnostics.lastError ? ` • Last error: ${micDiagnostics.lastError}` : ""}
+            </p>
+            <p className="mt-1 text-xs leading-6 text-[#7a6332]">
+              {micDiagnostics.lastEvent}
+            </p>
+          </div>
+          <div className="rounded-[1.4rem] border border-white/70 bg-white/72 px-4 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className="font-mono text-[0.62rem] uppercase tracking-[0.22em] text-[#8a6200]">
+                Signal test
+              </p>
+              <span className="text-xs font-medium text-[#7a6332]">
+                {micDiagnostics.testState === "testing"
+                  ? "Listening..."
+                  : micDiagnostics.testState === "pass"
+                    ? "Signal detected"
+                    : micDiagnostics.testState === "no-signal"
+                      ? "No signal"
+                      : "Idle"}
+              </span>
+            </div>
+            <div className="mt-3 h-3 overflow-hidden rounded-full bg-[rgba(11,116,255,0.08)]">
+              <div
+                className="h-full rounded-full bg-[linear-gradient(135deg,#0b74ff_0%,#30c2ff_100%)] transition-[width] duration-150"
+                style={{ width: `${Math.max(6, Math.min(100, micDiagnostics.level * 240))}%` }}
+              />
+            </div>
+            <p className="mt-2 text-xs leading-6 text-[#7a6332]">
+              Say a few words after clicking Test microphone. If the bar barely moves, Windows is likely routing Rovik to the wrong default input.
+            </p>
           </div>
         </div>
       </section>

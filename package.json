@@ -1,6 +1,6 @@
 {
   "name": "rovik-eve",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "private": true,
   "productName": "Rovik",
   "main": "electron/main.cjs",

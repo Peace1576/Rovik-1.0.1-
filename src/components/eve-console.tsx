@@ -47,6 +47,11 @@ type MicDiagnostics = {
   serviceReady: boolean;
 };
 
+type MicInputDevice = {
+  deviceId: string;
+  label: string;
+};
+
 type Message = {
   id: string;
   role: "user" | "assistant";
@@ -226,6 +231,14 @@ export function EveConsole() {
     testState: "idle",
     serviceReady: false,
   });
+  const [availableMicDevices, setAvailableMicDevices] = useState<MicInputDevice[]>(
+    [],
+  );
+  const [selectedMicDeviceId, setSelectedMicDeviceId] = useState<string | null>(
+    null,
+  );
+  const [desktopMicPreferenceReady, setDesktopMicPreferenceReady] =
+    useState(false);
   const [desktopTranscriptOpen, setDesktopTranscriptOpen] = useState(false);
   // When Chrome blocks window.open (async context), store url here so user can tap it
   const [pendingUrl, setPendingUrl] = useState<{ url: string; label: string } | null>(null);
@@ -256,6 +269,7 @@ export function EveConsole() {
   const micReadyRef = useRef(false);
   const micInitPromiseRef = useRef<Promise<boolean> | null>(null);
   const micTestCleanupRef = useRef<(() => void) | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
 
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
   const transcriptBoxRef = useRef<HTMLDivElement | null>(null);
@@ -319,6 +333,17 @@ export function EveConsole() {
   useEffect(() => {
     if (!desktopRuntime?.isDesktop) return;
 
+    if (typeof window !== "undefined") {
+      const storedDeviceId = window.localStorage.getItem("rovik.desktopMicDeviceId");
+      if (storedDeviceId) {
+        setSelectedMicDeviceId(storedDeviceId);
+      }
+    }
+    setDesktopMicPreferenceReady(true);
+  }, [desktopRuntime?.isDesktop]);
+
+  useEffect(() => {
+    if (!desktopRuntime?.isDesktop || !desktopMicPreferenceReady) return;
     void (async () => {
       const ready = await ensureMicrophoneReady();
       if (!ready || voiceStateRef.current === "listening") return;
@@ -327,7 +352,7 @@ export function EveConsole() {
       window.setTimeout(startWakeWordListener, 150);
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [desktopRuntime?.isDesktop]);
+  }, [desktopRuntime?.isDesktop, desktopMicPreferenceReady]);
 
   // Auto-start wake word listener on mount
   useEffect(() => {
@@ -346,6 +371,7 @@ export function EveConsole() {
       try { wakeRecRef.current?.stop(); } catch { /* ignore */ }
       try { activeRecRef.current?.stop(); } catch { /* ignore */ }
       try { micTestCleanupRef.current?.(); } catch { /* ignore */ }
+      try { micStreamRef.current?.getTracks().forEach((track) => track.stop()); } catch { /* ignore */ }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -605,24 +631,128 @@ export function EveConsole() {
     });
   }
 
-  async function ensureMicrophoneReady(quiet = false) {
-    if (micReadyRef.current) return true;
-    if (typeof window === "undefined") return false;
+  async function refreshMicrophoneDevices() {
+    if (typeof window === "undefined") return;
+    const enumerateDevices = navigator.mediaDevices?.enumerateDevices?.bind(
+      navigator.mediaDevices,
+    );
+    if (!enumerateDevices) return;
+
+    try {
+      const devices = await enumerateDevices();
+      const audioInputs = devices
+        .filter((device) => device.kind === "audioinput")
+        .map((device, index) => ({
+          deviceId: device.deviceId,
+          label: device.label?.trim() || `Microphone ${index + 1}`,
+        }));
+      setAvailableMicDevices(audioInputs);
+      if (!selectedMicDeviceId && audioInputs[0]?.deviceId) {
+        setSelectedMicDeviceId(audioInputs[0].deviceId);
+      }
+    } catch {
+      /* ignore enumeration failures */
+    }
+  }
+
+  function stopLiveMicStream() {
+    try {
+      micStreamRef.current?.getTracks().forEach((track) => track.stop());
+    } catch {
+      /* ignore */
+    } finally {
+      micStreamRef.current = null;
+    }
+  }
+
+  function getPreferredAudioConstraints(): MediaStreamConstraints["audio"] {
+    if (selectedMicDeviceId) {
+      return {
+        deviceId: { exact: selectedMicDeviceId },
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      };
+    }
+
+    return {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    };
+  }
+
+  async function acquireMicrophoneStream(forceRefresh = false) {
+    if (typeof window === "undefined") return null;
 
     const getUserMedia = navigator.mediaDevices?.getUserMedia?.bind(
       navigator.mediaDevices,
     );
-    if (!getUserMedia) return true;
+    if (!getUserMedia) return null;
+
+    const existingTrack = micStreamRef.current?.getAudioTracks?.()[0];
+    if (!forceRefresh && existingTrack && existingTrack.readyState === "live") {
+      return micStreamRef.current;
+    }
+
+    stopLiveMicStream();
+
+    try {
+      const stream = await getUserMedia({ audio: getPreferredAudioConstraints() });
+      micStreamRef.current = stream;
+      await refreshMicrophoneDevices();
+      return stream;
+    } catch (error) {
+      const name =
+        typeof error === "object" &&
+        error &&
+        "name" in error &&
+        typeof error.name === "string"
+          ? error.name
+          : "MicrophoneError";
+
+      if (
+        selectedMicDeviceId &&
+        (name === "OverconstrainedError" || name === "NotFoundError")
+      ) {
+        setSelectedMicDeviceId(null);
+        if (typeof window !== "undefined") {
+          window.localStorage.removeItem("rovik.desktopMicDeviceId");
+        }
+        const fallbackStream = await getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+        micStreamRef.current = fallbackStream;
+        await refreshMicrophoneDevices();
+        return fallbackStream;
+      }
+
+      throw error;
+    }
+  }
+
+  function getSpeechTrack() {
+    return micStreamRef.current?.getAudioTracks?.()[0] ?? null;
+  }
+
+  async function ensureMicrophoneReady(quiet = false) {
+    if (micReadyRef.current) return true;
+    if (typeof window === "undefined") return false;
+    if (!navigator.mediaDevices?.getUserMedia) return true;
 
     if (micInitPromiseRef.current) {
       return micInitPromiseRef.current;
     }
 
-    micInitPromiseRef.current = getUserMedia({ audio: true })
+    micInitPromiseRef.current = acquireMicrophoneStream(true)
       .then((stream) => {
+        if (!stream) return true;
         const [track] = stream.getAudioTracks();
         const label = track?.label?.trim() || "Default system microphone";
-        stream.getTracks().forEach((track) => track.stop());
         micReadyRef.current = true;
         clearMicNotice();
         updateMicDiagnostics({
@@ -687,7 +817,7 @@ export function EveConsole() {
         micInitPromiseRef.current = null;
       });
 
-    return micInitPromiseRef.current;
+      return micInitPromiseRef.current;
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -812,6 +942,7 @@ export function EveConsole() {
       const now = Date.now();
       lastSpeechRef.current = now;  // reset clock from when mic is truly live
       listenStartRef.current = now;
+      clearMicNotice();
       updateMicDiagnostics({
         serviceReady: true,
         lastError: null,
@@ -876,13 +1007,39 @@ export function EveConsole() {
       if (hasText) { stopSilenceTimer(); doSubmit(); return; }
       window.setTimeout(() => {
         if (sessionIdRef.current !== sid || voiceStateRef.current !== "listening") return;
-        try { rec.start(); } catch { goIdle(); }
+        const restartTrack = getSpeechTrack();
+        try {
+          if (restartTrack && restartTrack.readyState === "live") {
+            rec.start(restartTrack);
+          } else {
+            rec.start();
+          }
+        } catch {
+          try {
+            rec.start();
+          } catch {
+            goIdle();
+          }
+        }
       }, 150);
     };
 
-    activeRecRef.current = rec;
-    try { rec.start(); } catch { goIdle(); }
-  }
+      activeRecRef.current = rec;
+      const track = getSpeechTrack();
+      try {
+        if (track && track.readyState === "live") {
+          rec.start(track);
+        } else {
+          rec.start();
+        }
+      } catch {
+        try {
+          rec.start();
+        } catch {
+          goIdle();
+        }
+      }
+    }
 
   // ── Wake word listener ─────────────────────────────────────────────────────
 
@@ -910,14 +1067,15 @@ export function EveConsole() {
     let done = false;         // triggered wake word this session
     let restarted = false;    // onerror already scheduled restart
 
-    rec.onstart = () => {
-      wakeActiveRef.current = true;
-      wakeLastEventRef.current = Date.now();
-      updateMicDiagnostics({
-        serviceReady: true,
-        lastError: null,
-        lastEvent: "Wake word listener armed",
-      });
+      rec.onstart = () => {
+        wakeActiveRef.current = true;
+        wakeLastEventRef.current = Date.now();
+        clearMicNotice();
+        updateMicDiagnostics({
+          serviceReady: true,
+          lastError: null,
+          lastEvent: "Wake word listener armed",
+        });
     };
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1019,14 +1177,24 @@ export function EveConsole() {
       }
     };
 
-    try {
-      rec.start();
-      wakeRecRef.current = rec;
-    } catch {
-      wakeActiveRef.current = false;
-      if (voiceStateRef.current === "standby") window.setTimeout(startWakeWordListener, 350);
+      try {
+        const track = getSpeechTrack();
+        if (track && track.readyState === "live") {
+          rec.start(track);
+        } else {
+          rec.start();
+        }
+        wakeRecRef.current = rec;
+      } catch {
+        wakeActiveRef.current = false;
+        try {
+          rec.start();
+          wakeRecRef.current = rec;
+        } catch {
+          if (voiceStateRef.current === "standby") window.setTimeout(startWakeWordListener, 350);
+        }
+      }
     }
-  }
 
   // Toggle wake word on/off via the header button
   function toggleVoiceStandby() {
@@ -1128,6 +1296,7 @@ export function EveConsole() {
   async function retryMicrophoneAccess() {
     setMicActionBusy("request");
     try {
+      micReadyRef.current = false;
       const ready = await ensureMicrophoneReady();
       if (!ready) return;
 
@@ -1151,10 +1320,7 @@ export function EveConsole() {
 
   async function runMicrophoneSelfTest() {
     if (typeof window === "undefined") return;
-    const getUserMedia = navigator.mediaDevices?.getUserMedia?.bind(
-      navigator.mediaDevices,
-    );
-    if (!getUserMedia) {
+    if (!navigator.mediaDevices?.getUserMedia) {
       showMissingSpeechRecognitionNotice();
       return;
     }
@@ -1169,17 +1335,21 @@ export function EveConsole() {
     });
 
     try {
-      const stream = await getUserMedia({ audio: true });
+      const stream = await acquireMicrophoneStream(true);
+      if (!stream) {
+        throw new Error("Microphone stream unavailable");
+      }
       const [track] = stream.getAudioTracks();
       const label = track?.label?.trim() || "Default system microphone";
       const AudioCtx =
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         ((window as any).AudioContext ??
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (window as any).webkitAudioContext) as typeof AudioContext | undefined;
+          (window as any).webkitAudioContext) as
+          | typeof AudioContext
+          | undefined;
 
       if (!AudioCtx) {
-        stream.getTracks().forEach((currentTrack) => currentTrack.stop());
         updateMicDiagnostics({
           deviceLabel: label,
           testState: "idle",
@@ -1199,7 +1369,6 @@ export function EveConsole() {
 
       const finish = async (result: "pass" | "no-signal") => {
         micTestCleanupRef.current = null;
-        stream.getTracks().forEach((currentTrack) => currentTrack.stop());
         try {
           await ctx.close();
         } catch {
@@ -1222,7 +1391,7 @@ export function EveConsole() {
             kind: "device",
             title: "Microphone hears no signal",
             message:
-              "Rovik can open the microphone, but it is not seeing usable audio from the current default input. Set the correct Windows default microphone, then retry the microphone.",
+              "Rovik can open the microphone, but it is not seeing usable audio from the selected input. Pick the correct microphone below or change the Windows default input, then retry the microphone.",
           });
         } else {
           clearMicNotice();
@@ -1259,7 +1428,6 @@ export function EveConsole() {
       micTestCleanupRef.current = () => {
         window.clearInterval(interval);
         window.clearTimeout(timeout);
-        stream.getTracks().forEach((currentTrack) => currentTrack.stop());
         void ctx.close().catch(() => undefined);
       };
     } catch (error) {
@@ -1279,6 +1447,30 @@ export function EveConsole() {
     } finally {
       setMicActionBusy(null);
     }
+  }
+
+  async function selectDesktopMicrophone(deviceId: string) {
+    setSelectedMicDeviceId(deviceId);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("rovik.desktopMicDeviceId", deviceId);
+    }
+
+    micReadyRef.current = false;
+    stopListening();
+    const oldWake = wakeRecRef.current;
+    wakeRecRef.current = null;
+    wakeActiveRef.current = false;
+    try { oldWake?.stop(); } catch { /* ignore */ }
+    stopLiveMicStream();
+    updateMicDiagnostics({
+      serviceReady: false,
+      lastEvent: "Switching microphone input",
+      lastError: null,
+      level: 0,
+      testState: "idle",
+    });
+    clearMicNotice();
+    await retryMicrophoneAccess();
   }
 
   async function openExternalTarget(url: string, label: string) {
@@ -1570,6 +1762,28 @@ export function EveConsole() {
             <p className="mt-2 text-sm font-semibold text-[#3f2b00]">
               {micDiagnostics.deviceLabel ?? "Waiting for Windows default input"}
             </p>
+            {availableMicDevices.length > 0 && (
+              <label className="mt-3 block">
+                <span className="font-mono text-[0.58rem] uppercase tracking-[0.22em] text-[#8a6200]">
+                  Desktop input source
+                </span>
+                <select
+                  value={selectedMicDeviceId ?? availableMicDevices[0]?.deviceId ?? ""}
+                  onChange={(event) => {
+                    const nextId = event.target.value;
+                    if (!nextId) return;
+                    void selectDesktopMicrophone(nextId);
+                  }}
+                  className="mt-2 w-full rounded-2xl border border-[#0b74ff]/15 bg-white px-3 py-2 text-sm text-[#24344b] outline-none transition focus:border-[#0b74ff]/45"
+                >
+                  {availableMicDevices.map((device) => (
+                    <option key={device.deviceId} value={device.deviceId}>
+                      {device.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <p className="mt-2 text-xs leading-6 text-[#7a6332]">
               Wake listener: {micDiagnostics.serviceReady ? "armed" : "not ready"}
               {micDiagnostics.lastError ? ` • Last error: ${micDiagnostics.lastError}` : ""}

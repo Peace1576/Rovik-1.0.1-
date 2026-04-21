@@ -26,6 +26,33 @@ type DesktopRuntime = {
   appVersion: string;
 };
 
+type DesktopVoiceDevice = {
+  index: number;
+  name: string;
+};
+
+type DesktopVoiceState = {
+  available: boolean;
+  backend: "picovoice";
+  configured: boolean;
+  accessKeyPresent: boolean;
+  keywordModelPresent: boolean;
+  keywordLabel: string;
+  usingBuiltinKeyword: boolean;
+  devices: DesktopVoiceDevice[];
+  selectedDeviceIndex: number;
+  selectedDeviceName: string | null;
+  status: "idle" | "armed" | "triggered" | "error";
+  lastEvent: string;
+  lastError: string | null;
+  voiceProbability: number;
+};
+
+type DesktopVoiceEvent = {
+  type: "state" | "wake-word-detected";
+  state: DesktopVoiceState;
+};
+
 type MicNoticeKind =
   | "permission"
   | "device"
@@ -211,6 +238,8 @@ export function EveConsole() {
   const [desktopRuntime, setDesktopRuntime] = useState<DesktopRuntime | null>(
     null,
   );
+  const [desktopVoiceState, setDesktopVoiceState] =
+    useState<DesktopVoiceState | null>(null);
   const [liveExcerpt, setLiveExcerpt] = useState(introMessage);
   const [recentActions, setRecentActions] = useState<ClientAction[]>([]);
   const [conversationState, setConversationState] = useState<ConversationState>({
@@ -270,6 +299,7 @@ export function EveConsole() {
   const micInitPromiseRef = useRef<Promise<boolean> | null>(null);
   const micTestCleanupRef = useRef<(() => void) | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
+  const desktopVoiceStateRef = useRef<DesktopVoiceState | null>(null);
 
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
   const transcriptBoxRef = useRef<HTMLDivElement | null>(null);
@@ -343,13 +373,57 @@ export function EveConsole() {
   }, [desktopRuntime?.isDesktop]);
 
   useEffect(() => {
+    if (!desktopRuntime?.isDesktop || !window.eveDesktop) return;
+
+    let active = true;
+    const unsubscribe = window.eveDesktop.onVoiceEvent((event: DesktopVoiceEvent) => {
+      if (!active) return;
+      applyDesktopVoiceState(event.state);
+
+      if (event.type === "wake-word-detected") {
+        void (async () => {
+          if (voiceStateRef.current !== "standby") return;
+          cancelPlayback();
+          await syncBrowserMicSelection(event.state.selectedDeviceName);
+          micReadyRef.current = false;
+          const ready = await ensureMicrophoneReady(true);
+          if (!ready) {
+            raiseMicNotice({
+              kind: "device",
+              title: "Microphone handoff failed",
+              message:
+                "Rovik heard the wake word locally, but Windows did not hand the selected microphone over for speech capture. Retry the microphone or pick another input.",
+            });
+            return;
+          }
+          startListening("", 7000);
+        })();
+      }
+    });
+
+    void window.eveDesktop
+      .getVoiceState()
+      .then((state) => {
+        if (!active) return;
+        applyDesktopVoiceState(state);
+      })
+      .catch(() => undefined);
+
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [desktopRuntime?.isDesktop]);
+
+  useEffect(() => {
     if (!desktopRuntime?.isDesktop || !desktopMicPreferenceReady) return;
     void (async () => {
       const ready = await ensureMicrophoneReady();
       if (!ready || voiceStateRef.current === "listening") return;
       stopListening();
       setVoiceSynced("standby");
-      window.setTimeout(startWakeWordListener, 150);
+      armWakeWordDetection(150);
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [desktopRuntime?.isDesktop, desktopMicPreferenceReady]);
@@ -357,7 +431,7 @@ export function EveConsole() {
   // Auto-start wake word listener on mount
   useEffect(() => {
     if (!window.eveDesktop) {
-      startWakeWordListener();
+      armWakeWordDetection();
     }
     return () => {
       if (typeof window !== "undefined" && "speechSynthesis" in window) {
@@ -372,16 +446,21 @@ export function EveConsole() {
       try { activeRecRef.current?.stop(); } catch { /* ignore */ }
       try { micTestCleanupRef.current?.(); } catch { /* ignore */ }
       try { micStreamRef.current?.getTracks().forEach((track) => track.stop()); } catch { /* ignore */ }
+      const stopPromise = window.eveDesktop?.stopVoiceEngine?.();
+      if (stopPromise) {
+        void stopPromise.catch(() => undefined);
+      }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (window.eveDesktop) return;
 
     function revive() {
       if (voiceStateRef.current === "standby" && !wakeRecRef.current) {
-        startWakeWordListener();
+        armWakeWordDetection();
       }
     }
     window.addEventListener("focus", revive);
@@ -401,7 +480,7 @@ export function EveConsole() {
         wakeRecRef.current = null;
         wakeActiveRef.current = false;
         try { old?.stop(); } catch { /* ignore */ }
-        window.setTimeout(startWakeWordListener, 300);
+        armWakeWordDetection(300);
       }
     }, 6000);
 
@@ -629,6 +708,218 @@ export function EveConsole() {
       message:
         "Rovik can use text right now, but desktop voice recognition is unavailable. Retry the microphone or reopen the desktop app after checking your connection.",
     });
+  }
+
+  function normalizeMicLabel(label: string | null | undefined) {
+    return (label ?? "")
+      .toLowerCase()
+      .replace(/^default\s*-\s*/i, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function findMatchingBrowserMic(
+    targetLabel: string | null | undefined,
+    devices: MicInputDevice[],
+  ) {
+    const normalizedTarget = normalizeMicLabel(targetLabel);
+    if (!normalizedTarget) return null;
+
+    return (
+      devices.find(
+        (device) => normalizeMicLabel(device.label) === normalizedTarget,
+      ) ??
+      devices.find((device) =>
+        normalizeMicLabel(device.label).includes(normalizedTarget),
+      ) ??
+      devices.find((device) =>
+        normalizedTarget.includes(normalizeMicLabel(device.label)),
+      ) ??
+      null
+    );
+  }
+
+  function stopBrowserWakeWordListener() {
+    const oldWake = wakeRecRef.current;
+    wakeRecRef.current = null;
+    wakeActiveRef.current = false;
+    try {
+      oldWake?.stop();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function stopWakeWordDetection() {
+    stopBrowserWakeWordListener();
+    if (desktopRuntime?.isDesktop && window.eveDesktop) {
+      const stopPromise = window.eveDesktop?.stopVoiceEngine?.();
+      if (stopPromise) {
+        void stopPromise.catch(() => undefined);
+      }
+    }
+  }
+
+  function armWakeWordDetection(delayMs = 0) {
+    const arm = () => {
+      if (voiceStateRef.current !== "standby") return;
+
+      if (desktopRuntime?.isDesktop && window.eveDesktop) {
+        const nativeState = desktopVoiceStateRef.current;
+        if (!nativeState) {
+          void window.eveDesktop
+            .getVoiceState()
+            .then((state) => applyDesktopVoiceState(state))
+            .catch(() => undefined);
+          return;
+        }
+        if (!nativeState.available) {
+          updateMicDiagnostics((current) => ({
+            ...current,
+            serviceReady: false,
+            lastEvent: nativeState.lastEvent,
+            lastError: nativeState.lastError,
+          }));
+          return;
+        }
+        if (!nativeState?.configured) {
+          updateMicDiagnostics((current) => ({
+            ...current,
+            serviceReady: false,
+            lastEvent: nativeState?.lastEvent ?? current.lastEvent,
+            lastError: nativeState?.lastError ?? current.lastError,
+          }));
+          return;
+        }
+        const startPromise = window.eveDesktop?.startVoiceEngine?.();
+        if (startPromise) {
+          void startPromise.catch(() => undefined);
+        }
+        return;
+      }
+
+      startWakeWordListener();
+    };
+
+    if (delayMs > 0) {
+      window.setTimeout(arm, delayMs);
+    } else {
+      arm();
+    }
+  }
+
+  async function syncBrowserMicSelection(targetLabel: string | null | undefined) {
+    if (typeof window === "undefined" || !targetLabel) return null;
+    const enumerateDevices = navigator.mediaDevices?.enumerateDevices?.bind(
+      navigator.mediaDevices,
+    );
+    if (!enumerateDevices) return null;
+
+    try {
+      const devices = await enumerateDevices();
+      const audioInputs = devices
+        .filter((device) => device.kind === "audioinput")
+        .map((device, index) => ({
+          deviceId: device.deviceId,
+          label: device.label?.trim() || `Microphone ${index + 1}`,
+        }));
+
+      setAvailableMicDevices(audioInputs);
+      const matched = findMatchingBrowserMic(targetLabel, audioInputs);
+      if (!matched) return null;
+
+      if (matched.deviceId !== selectedMicDeviceId) {
+        setSelectedMicDeviceId(matched.deviceId);
+        window.localStorage.setItem("rovik.desktopMicDeviceId", matched.deviceId);
+      }
+      return matched;
+    } catch {
+      return null;
+    }
+  }
+
+  function applyDesktopVoiceState(nextState: DesktopVoiceState) {
+    const previousDeviceName = desktopVoiceStateRef.current?.selectedDeviceName;
+    desktopVoiceStateRef.current = nextState;
+    setDesktopVoiceState(nextState);
+
+    updateMicDiagnostics((current) => ({
+      ...current,
+      deviceLabel: nextState.selectedDeviceName ?? current.deviceLabel,
+      serviceReady: nextState.status === "armed",
+      lastError: nextState.lastError,
+      lastEvent: nextState.lastEvent,
+      level:
+        current.testState === "testing"
+          ? current.level
+          : nextState.status === "armed"
+            ? Math.max(current.level * 0.68, nextState.voiceProbability)
+            : nextState.voiceProbability,
+    }));
+
+    if (
+      nextState.selectedDeviceName &&
+      nextState.selectedDeviceName !== previousDeviceName
+    ) {
+      void syncBrowserMicSelection(nextState.selectedDeviceName);
+    }
+
+    if (!nextState.available) {
+      setMicNotice({
+        kind: "speech-service",
+        title: "Desktop wake engine unavailable",
+        message:
+          "Rovik could not load the local wake-word engine on this Windows build. Manual mic still works while the desktop voice backend is repaired.",
+      });
+      return;
+    }
+
+    if (!nextState.configured) {
+      const missingMessage = !nextState.accessKeyPresent
+        ? "Rovik's local wake-word engine needs a Picovoice access key before 'Hey Eve' can run in the desktop app. Manual mic still works."
+        : "Rovik's local wake-word engine is missing the Eve keyword model (.ppn), so 'Hey Eve' cannot arm locally yet. Manual mic still works.";
+
+      setMicNotice((current) => {
+        if (
+          current?.kind === "permission" ||
+          current?.kind === "device" ||
+          current?.kind === "microphone-error"
+        ) {
+          return current;
+        }
+
+        return {
+          kind: "speech-service",
+          title: "Local wake word needs setup",
+          message: missingMessage,
+        };
+      });
+      return;
+    }
+
+    if (nextState.status === "armed") {
+      clearMicNotice();
+      return;
+    }
+
+    if (nextState.status === "error" && nextState.lastError) {
+      setMicNotice((current) => {
+        if (
+          current?.kind === "permission" ||
+          current?.kind === "device" ||
+          current?.kind === "microphone-error"
+        ) {
+          return current;
+        }
+
+        return {
+          kind: "speech-service",
+          title: "Desktop wake engine error",
+          message:
+            "Rovik hit a local wake-word engine error. Retry the microphone or reopen the desktop app if wake word stays down.",
+        };
+      });
+    }
   }
 
   async function refreshMicrophoneDevices() {
@@ -862,7 +1153,7 @@ export function EveConsole() {
   function goIdle() {
     stopListening();
     setVoiceSynced("standby");
-    window.setTimeout(startWakeWordListener, 300);
+    armWakeWordDetection(300);
   }
 
   function doSubmit() {
@@ -873,7 +1164,7 @@ export function EveConsole() {
     setVoiceSynced("standby");
     // Don't start wake word yet — finishPlayback will call startPostReplyListen
     if (text) void submitPrompt(text);
-    else window.setTimeout(startWakeWordListener, 300); // nothing to submit → back to idle
+    else armWakeWordDetection(300); // nothing to submit → back to idle
   }
 
   function startListening(seedText: string, initialWindowMs: number) {
@@ -885,10 +1176,7 @@ export function EveConsole() {
     if (voiceStateRef.current === "off") return;
 
     // Stop wake word before starting active rec (Chrome: one SR at a time)
-    const oldWake = wakeRecRef.current;
-    wakeRecRef.current = null;
-    wakeActiveRef.current = false;
-    try { oldWake?.stop(); } catch { /* ignore */ }
+    stopWakeWordDetection();
 
     stopListening();
     const sid = sessionIdRef.current; // use id AFTER stopListening incremented it
@@ -1044,6 +1332,7 @@ export function EveConsole() {
   // ── Wake word listener ─────────────────────────────────────────────────────
 
   function startWakeWordListener() {
+    if (desktopRuntime?.isDesktop && window.eveDesktop) return;
     const SR = getSR();
       if (!SR) {
       showMissingSpeechRecognitionNotice();
@@ -1155,7 +1444,7 @@ export function EveConsole() {
       if (wakeRecRef.current !== rec) return; // watchdog already replaced us
       wakeRecRef.current = null;
       restarted = true;
-      window.setTimeout(startWakeWordListener, e.error === "service-unavailable" ? 1500 : 200);
+      armWakeWordDetection(e.error === "service-unavailable" ? 1500 : 200);
     };
 
     rec.onend = () => {
@@ -1173,7 +1462,7 @@ export function EveConsole() {
       if (voiceStateRef.current === "standby" && !done && !restarted && wakeRecRef.current === rec) {
         wakeRecRef.current = null;
         restarted = true;
-        window.setTimeout(startWakeWordListener, 200);
+        armWakeWordDetection(200);
       }
     };
 
@@ -1191,7 +1480,7 @@ export function EveConsole() {
           rec.start();
           wakeRecRef.current = rec;
         } catch {
-          if (voiceStateRef.current === "standby") window.setTimeout(startWakeWordListener, 350);
+          if (voiceStateRef.current === "standby") armWakeWordDetection(350);
         }
       }
     }
@@ -1202,10 +1491,7 @@ export function EveConsole() {
       void retryMicrophoneAccess();
     } else {
       stopListening();
-      const old = wakeRecRef.current;
-      wakeRecRef.current = null;
-      wakeActiveRef.current = false;
-      try { old?.stop(); } catch { /* ignore */ }
+      stopWakeWordDetection();
       setVoiceSynced("off");
     }
   }
@@ -1216,6 +1502,7 @@ export function EveConsole() {
       goIdle();
     } else {
       void (async () => {
+        stopWakeWordDetection();
         const ready = await ensureMicrophoneReady();
         if (!ready) return;
         startListening("", 8000);
@@ -1300,6 +1587,10 @@ export function EveConsole() {
       const ready = await ensureMicrophoneReady();
       if (!ready) return;
 
+      if (desktopVoiceStateRef.current?.selectedDeviceName) {
+        await syncBrowserMicSelection(desktopVoiceStateRef.current.selectedDeviceName);
+      }
+
       stopListening();
       clearMicNotice();
       setStatus("ready");
@@ -1312,7 +1603,7 @@ export function EveConsole() {
         lastError: null,
       });
       setVoiceSynced("standby");
-      window.setTimeout(startWakeWordListener, 150);
+      armWakeWordDetection(150);
     } finally {
       setMicActionBusy(null);
     }
@@ -1455,12 +1746,29 @@ export function EveConsole() {
       window.localStorage.setItem("rovik.desktopMicDeviceId", deviceId);
     }
 
+    const browserSelection =
+      availableMicDevices.find((device) => device.deviceId === deviceId) ?? null;
+    const nativeMatch =
+      browserSelection && desktopVoiceStateRef.current
+        ? findMatchingBrowserMic(
+            browserSelection.label,
+            desktopVoiceStateRef.current.devices.map((device) => ({
+              deviceId: String(device.index),
+              label: device.name,
+            })),
+          )
+        : null;
+
+    if (nativeMatch && window.eveDesktop) {
+      const nextState = await window.eveDesktop.setVoiceDeviceIndex(
+        Number(nativeMatch.deviceId),
+      );
+      applyDesktopVoiceState(nextState);
+    }
+
     micReadyRef.current = false;
     stopListening();
-    const oldWake = wakeRecRef.current;
-    wakeRecRef.current = null;
-    wakeActiveRef.current = false;
-    try { oldWake?.stop(); } catch { /* ignore */ }
+    stopWakeWordDetection();
     stopLiveMicStream();
     updateMicDiagnostics({
       serviceReady: false,
@@ -1686,6 +1994,19 @@ export function EveConsole() {
   }
 
   const isDesktopShell = !!desktopRuntime?.isDesktop;
+  const usingNativeDesktopWake =
+    isDesktopShell && Boolean(desktopVoiceState?.available);
+  const desktopWakeStatusLabel = !usingNativeDesktopWake
+    ? "Browser standby"
+    : !desktopVoiceState?.configured
+      ? "Needs setup"
+      : desktopVoiceState.status === "armed"
+        ? "Armed"
+        : desktopVoiceState.status === "triggered"
+          ? "Triggered"
+          : desktopVoiceState.status === "error"
+            ? "Error"
+            : "Idle";
   const statusLabel =
     micNotice
       ? micNotice.title
@@ -1760,7 +2081,9 @@ export function EveConsole() {
               Current microphone
             </p>
             <p className="mt-2 text-sm font-semibold text-[#3f2b00]">
-              {micDiagnostics.deviceLabel ?? "Waiting for Windows default input"}
+              {desktopVoiceState?.selectedDeviceName ??
+                micDiagnostics.deviceLabel ??
+                "Waiting for desktop input"}
             </p>
             {availableMicDevices.length > 0 && (
               <label className="mt-3 block">
@@ -1785,7 +2108,7 @@ export function EveConsole() {
               </label>
             )}
             <p className="mt-2 text-xs leading-6 text-[#7a6332]">
-              Wake listener: {micDiagnostics.serviceReady ? "armed" : "not ready"}
+              Wake listener: {desktopWakeStatusLabel}
               {micDiagnostics.lastError ? ` • Last error: ${micDiagnostics.lastError}` : ""}
             </p>
             <p className="mt-1 text-xs leading-6 text-[#7a6332]">
@@ -2101,9 +2424,9 @@ export function EveConsole() {
                 </div>
               )}
 
-              {isDesktopShell && voiceState === "standby" && (
+              {isDesktopShell && voiceState === "standby" && desktopVoiceState?.configured && (
                 <p className="font-mono text-[0.68rem] uppercase tracking-[0.22em] text-[#4a90c4]/80">
-                  Listening for &quot;Eve&quot;...
+                  Listening for &quot;{desktopVoiceState.keywordLabel}&quot; locally...
                 </p>
               )}
 

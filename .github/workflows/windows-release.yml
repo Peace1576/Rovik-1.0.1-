@@ -75,6 +75,8 @@ jobs:
             GOOGLE_API_KEY = "${{ secrets.GEMINI_API_KEY }}"
             NEXT_PUBLIC_SUPABASE_URL = "${{ vars.NEXT_PUBLIC_SUPABASE_URL }}"
             NEXT_PUBLIC_SUPABASE_ANON_KEY = "${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}"
+            PICOVOICE_ACCESS_KEY = "${{ secrets.PICOVOICE_ACCESS_KEY }}"
+            PICOVOICE_BUILTIN_KEYWORD = "${{ vars.PICOVOICE_BUILTIN_KEYWORD }}"
           } | ConvertTo-Json
 
           Set-Content -Path "$env:GITHUB_WORKSPACE\\desktop-env.json" -Value $desktopEnv -Encoding utf8

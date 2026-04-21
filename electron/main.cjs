@@ -6,6 +6,7 @@ const path = require("node:path");
 const { app, BrowserWindow, ipcMain, shell } = require("electron");
 
 const { startEmbeddedNext } = require("./next-server.cjs");
+const { DesktopVoiceEngine } = require("./voice-engine.cjs");
 const {
   openApp,
   openExternal,
@@ -16,6 +17,7 @@ const {
 
 let mainWindow = null;
 let embeddedServer = null;
+let desktopVoiceEngine = null;
 const desktopSessionToken = crypto.randomUUID();
 
 function loadBundledDesktopEnv() {
@@ -129,6 +131,16 @@ async function getRendererUrl() {
 }
 
 function registerDesktopHandlers() {
+  if (!desktopVoiceEngine) {
+    desktopVoiceEngine = new DesktopVoiceEngine({
+      appRoot: getAppRoot(),
+    });
+    desktopVoiceEngine.on("event", (payload) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      mainWindow.webContents.send("desktop:voice-event", payload);
+    });
+  }
+
   ipcMain.handle("desktop:get-runtime-info", () => ({
     isDesktop: true,
     platform: process.platform,
@@ -145,6 +157,21 @@ function registerDesktopHandlers() {
   );
   ipcMain.handle("desktop:write-clipboard", (_event, text) =>
     writeClipboard(text),
+  );
+  ipcMain.handle("desktop:voice-get-state", () =>
+    desktopVoiceEngine.snapshot(),
+  );
+  ipcMain.handle("desktop:voice-start", async () =>
+    desktopVoiceEngine.start(),
+  );
+  ipcMain.handle("desktop:voice-stop", async () =>
+    desktopVoiceEngine.stop(),
+  );
+  ipcMain.handle("desktop:voice-retry", async () =>
+    desktopVoiceEngine.retry(),
+  );
+  ipcMain.handle("desktop:voice-set-device-index", async (_event, deviceIndex) =>
+    desktopVoiceEngine.setDeviceIndex(deviceIndex),
   );
 }
 
@@ -223,5 +250,8 @@ app.on("window-all-closed", async () => {
 });
 
 app.on("before-quit", async () => {
+  if (desktopVoiceEngine) {
+    await desktopVoiceEngine.stop("Desktop app shutting down");
+  }
   await stopEmbeddedServer();
 });

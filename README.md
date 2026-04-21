@@ -83,6 +83,12 @@ The desktop app keeps Eve alive while opening external sites and adds native Win
 Desktop note:
 
 - `GEMINI_API_KEY` is still required for live Gemini replies. Without it, the packaged app still launches but Eve falls back to offline demo mode.
+- Desktop wake word now supports an open-source path through `openWakeWord` with a local Python sidecar.
+- To use the open-source wake backend today, provide one of:
+  - a custom Eve wake model in `voice-models/eve.onnx`, `voice-models/eve.tflite`, `voice-models/eve_oww.onnx`, or `voice-models/eve_oww.tflite`
+  - or a temporary built-in model name via `OPENWAKEWORD_MODEL_NAME` for backend validation
+- `ROVIK_WAKE_BACKEND=openwakeword` forces the desktop app onto the openWakeWord path.
+- The packaged Windows app does not bundle Python yet, so a local Python runtime is still required for the openWakeWord backend in the current build.
 
 ## Deploying to Vercel
 

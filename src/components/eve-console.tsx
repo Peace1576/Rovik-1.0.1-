@@ -33,11 +33,20 @@ type DesktopVoiceDevice = {
 
 type DesktopVoiceState = {
   available: boolean;
-  backend: "picovoice";
+  backend: "picovoice" | "openwakeword";
   configured: boolean;
   accessKeyPresent: boolean;
   keywordModelPresent: boolean;
+  pythonRuntimePresent: boolean;
+  configurationIssue:
+    | "missing_picovoice_access_key"
+    | "missing_picovoice_model"
+    | "missing_python_runtime"
+    | "missing_openwakeword_model"
+    | "recorder_unavailable"
+    | null;
   keywordLabel: string;
+  wakeModelSource: "custom" | "builtin" | "none";
   usingBuiltinKeyword: boolean;
   devices: DesktopVoiceDevice[];
   selectedDeviceIndex: number;
@@ -875,9 +884,33 @@ export function EveConsole() {
     }
 
     if (!nextState.configured) {
-      const missingMessage = !nextState.accessKeyPresent
-        ? "Rovik's local wake-word engine needs a Picovoice access key before 'Hey Eve' can run in the desktop app. Manual mic still works."
-        : "Rovik's local wake-word engine is missing the Eve keyword model (.ppn), so 'Hey Eve' cannot arm locally yet. Manual mic still works.";
+      let missingMessage =
+        "Rovik's local wake-word engine still needs setup before desktop wake word can run. Manual mic still works.";
+      let missingTitle = "Local wake word needs setup";
+
+      if (nextState.configurationIssue === "missing_picovoice_access_key") {
+        missingMessage =
+          "Rovik's local wake-word engine needs a Picovoice access key before desktop wake word can run. Manual mic still works.";
+      } else if (nextState.configurationIssue === "missing_picovoice_model") {
+        missingMessage =
+          "Rovik's Picovoice wake-word model for Eve is missing, so local wake word cannot arm yet. Manual mic still works.";
+      } else if (nextState.configurationIssue === "missing_python_runtime") {
+        missingTitle = "Python runtime missing";
+        missingMessage =
+          "Rovik's openWakeWord desktop backend needs a local Python runtime on Windows. Manual mic still works until the bundled wake backend is added.";
+      } else if (
+        nextState.configurationIssue === "missing_openwakeword_model"
+      ) {
+        missingTitle = "Wake model missing";
+        missingMessage =
+          nextState.wakeModelSource === "builtin"
+            ? "Rovik could not resolve the selected openWakeWord model. Check the configured model name or add a custom Eve model file."
+            : "Rovik's openWakeWord backend needs a custom Eve model file (.onnx or .tflite) or a temporary built-in model selection before local wake word can run.";
+      } else if (nextState.configurationIssue === "recorder_unavailable") {
+        missingTitle = "Recorder unavailable";
+        missingMessage =
+          "Rovik could not access the desktop audio recorder backend. Manual mic still works if Windows browser-style capture is available.";
+      }
 
       setMicNotice((current) => {
         if (
@@ -890,7 +923,7 @@ export function EveConsole() {
 
         return {
           kind: "speech-service",
-          title: "Local wake word needs setup",
+          title: missingTitle,
           message: missingMessage,
         };
       });

@@ -18,11 +18,20 @@ type DesktopVoiceDevice = {
 
 type DesktopVoiceState = {
   available: boolean;
-  backend: "picovoice";
+  backend: "picovoice" | "openwakeword";
   configured: boolean;
   accessKeyPresent: boolean;
   keywordModelPresent: boolean;
+  pythonRuntimePresent: boolean;
+  configurationIssue:
+    | "missing_picovoice_access_key"
+    | "missing_picovoice_model"
+    | "missing_python_runtime"
+    | "missing_openwakeword_model"
+    | "recorder_unavailable"
+    | null;
   keywordLabel: string;
+  wakeModelSource: "custom" | "builtin" | "none";
   usingBuiltinKeyword: boolean;
   devices: DesktopVoiceDevice[];
   selectedDeviceIndex: number;

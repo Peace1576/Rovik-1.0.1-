@@ -77,6 +77,10 @@ jobs:
             NEXT_PUBLIC_SUPABASE_ANON_KEY = "${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}"
             PICOVOICE_ACCESS_KEY = "${{ secrets.PICOVOICE_ACCESS_KEY }}"
             PICOVOICE_BUILTIN_KEYWORD = "${{ vars.PICOVOICE_BUILTIN_KEYWORD }}"
+            ROVIK_WAKE_BACKEND = "${{ vars.ROVIK_WAKE_BACKEND }}"
+            OPENWAKEWORD_MODEL_NAME = "${{ vars.OPENWAKEWORD_MODEL_NAME }}"
+            OPENWAKEWORD_THRESHOLD = "${{ vars.OPENWAKEWORD_THRESHOLD }}"
+            OPENWAKEWORD_VAD_THRESHOLD = "${{ vars.OPENWAKEWORD_VAD_THRESHOLD }}"
           } | ConvertTo-Json
 
           Set-Content -Path "$env:GITHUB_WORKSPACE\\desktop-env.json" -Value $desktopEnv -Encoding utf8
